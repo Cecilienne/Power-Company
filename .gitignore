@@ -42,3 +42,6 @@ tools/*
 !tools/make_notice.py
 !tools/make_version_file.py
 !tools/pack_release.py
+
+# ---- 素材原件（已复制到 assets/bgm/，原件不入库）----
+566818365-*.mp4

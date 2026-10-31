@@ -244,15 +244,25 @@ GREEN_CARBON_INTENSITY = 0.18   # t/MWh
 GREEN_RENEWABLE = 0.55
 
 # ---------------------------------------------------------------- 颜色（UI）
-UI_BG = "#1d2026"
-UI_PANEL = "#262a33"
-UI_TEXT = "#e6e6e6"
-UI_DIM = "#9aa1ad"
-UI_ACCENT = "#4fa3ff"
-UI_GOOD = "#57c785"
-UI_BAD = "#e0605e"
-UI_WARN = "#e5b454"
-COMPANY_COLORS = ("#4fa3ff", "#e0605e", "#57c785", "#c98be0")
+# 与启动页同一套瑞士风格色板：黑底 + 白字 + 蓝/红/黄三色块，绿色只做"正常"状态。
+# 游戏内界面不再自造灰蓝色系（旧值是 #1d2026/#262a33/#4fa3ff，与启动页两套皮）。
+UI_BG = "#0B0B0C"          # 画布底
+UI_PANEL = "#14151A"       # 面板 / 抽屉
+UI_PANEL2 = "#1A1C22"      # 面板内的二级块（标题条、列表底）
+UI_HOVER = "#24262E"       # 悬停底
+UI_RULE = "#26262B"        # 1px 分隔线
+UI_TEXT = "#F4F2EC"
+UI_DIM = "#A6A6AC"
+UI_DIM2 = "#55555C"
+UI_BLUE = "#21449C"        # 数据块 / 选中（与标题块同色）
+UI_RED = "#E1251B"         # 主行动 / 危险
+UI_YELLOW = "#F2E600"      # 强调数字 / 选中强调
+UI_SEL = "#21449C"         # 列表选中行底色
+UI_ACCENT = UI_YELLOW
+UI_GOOD = "#35C15A"
+UI_BAD = "#E1251B"
+UI_WARN = "#F2E600"
+COMPANY_COLORS = ("#4FA3FF", "#E1251B", "#35C15A", "#F2E600")
 
 # ---------------------------------------------------------------- 版本 / 启动页
 VERSION = "1.0.0"

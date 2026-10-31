@@ -72,3 +72,8 @@ def data_dir() -> Path:
 
 def save_file(name: str = "slot1.pkl") -> Path:
     return data_dir() / name
+
+
+def asset(*parts: str) -> Path:
+    """只读资源（图标、背景音乐）——打包后在 _MEIPASS 里，源码运行时在项目根目录。"""
+    return resource_dir().joinpath(*parts)

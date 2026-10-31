@@ -19,7 +19,7 @@ from datetime import datetime
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from .. import paths
+from .. import audio, paths
 from ..constants import (
     BUILD,
     MAX_TURNS,
@@ -364,7 +364,8 @@ class StartScreen(tk.Frame):
 
     def _row(self, i: int, num: str, zh: str, en: str, value: str, *,
              emphasis: bool = False, size: float = 15, focus: bool = False,
-             arrow: bool = False, hover: bool = False) -> None:
+             arrow: bool = False, hover: bool = False, chip: bool = False,
+             hot: bool = False) -> None:
         y = ROWS_Y + i * ROW_H
         if hover:
             # 可点的行给一块压深的黄底：鼠标扫过就知道这行能按
@@ -379,9 +380,22 @@ class StartScreen(tk.Frame):
         self._t(PANEL_L + 36, y + 8, zh, 18, UI_START_BG, F_REG)
         self._t(PANEL_L + 38, y + 31, en, 7.5, "#5A5413", F_LAT, 2.2)
         text = f"‹ {value} ›" if arrow else value
-        self._t(0, y + 14, text, size, UI_START_BG,
-                F_MED if emphasis else F_LAT, 1.2 if emphasis else 0.0,
-                right=PANEL_R)
+        fam = F_MED if emphasis else F_LAT
+        track = 1.2 if emphasis else 0.0
+        if chip:
+            # 把取值画成一个真开关：黑描边方块，悬停反白——一眼看出"这块能按"
+            f = self._font(fam, size, False)
+            w = self._text_width(text, f, track) / self._k
+            self.cv.create_rectangle(
+                self.X(PANEL_R - w - 14), self.Y(y + 9),
+                self.X(PANEL_R + 14), self.Y(y + ROW_H - 9),
+                fill=UI_START_BG if hot else UI_START_YELLOW,
+                outline=UI_START_BG, width=max(1.0, 1.5 * self._k))
+            self._t(0, y + 14, text, size,
+                    UI_START_YELLOW if hot else UI_START_BG,
+                    fam, track, right=PANEL_R)
+        else:
+            self._t(0, y + 14, text, size, UI_START_BG, fam, track, right=PANEL_R)
         self._line(PANEL_L, y + ROW_H, PANEL_R, y + ROW_H, "#B8AC00")
 
     # -- 设置面板
@@ -389,10 +403,16 @@ class StartScreen(tk.Frame):
         disp = "全屏" if prefs.get("display") == "fullscreen" else "窗口"
         auto = "开" if prefs.get("autosave") else "关"
         chk = "通过" if self.ok else "失败"
+        if prefs.get("audio") != "on":
+            aud = "关"
+        elif audio.BGM.available():
+            aud = "开 · BGM 01"
+        else:
+            aud = "不可用"
         return [
             ("01", "语言", "LANGUAGE", "简体中文", False, False),
             ("02", "显示", "DISPLAY", disp, True, True),
-            ("03", "音频", "AUDIO", "未接入", False, True),
+            ("03", "音频", "AUDIO", aud, True, True),
             ("04", "难度", "DIFFICULTY", "标准", False, False),
             ("05", "自动存档", "AUTOSAVE", auto, True, True),
             ("06", "数据校验", "DATA CHECK", chk, False, True),
@@ -403,7 +423,7 @@ class StartScreen(tk.Frame):
         rows = self._settings_rows()
         if not (0 <= i < len(rows)):
             return None
-        return {"显示": "display", "自动存档": "autosave",
+        return {"显示": "display", "自动存档": "autosave", "音频": "audio",
                 "数据校验": "recheck"}.get(rows[i][1])
 
     def _panel_settings(self, editable: bool) -> None:
@@ -417,7 +437,9 @@ class StartScreen(tk.Frame):
             self._row(i, num, zh, en, val, emphasis=emphasis,
                       focus=(editable and self.row == i),
                       arrow=(editable and arrow),
-                      hover=(can_press and self.hover_row == i))
+                      hover=(can_press and self.hover_row == i),
+                      chip=can_press,
+                      hot=(can_press and self.hover_row == i))
         hint = ("↑↓ 选择 · ←→ 调整 · 点击/ENTER 生效 · ESC 返回" if editable
                 else "↑↓ 选择 · ENTER 确认 · ESC 退出")
         self._t(PANEL_L, 838, hint, 8.5, "#4A4310", F_LAT, 2.2)
@@ -645,10 +667,31 @@ class StartScreen(tk.Frame):
             self.after(60, self._render)
         elif act == "autosave":
             prefs.put("autosave", not prefs.get("autosave"))
+        elif act == "audio":
+            self._toggle_audio()
         elif act == "recheck":
             self.check = self._self_check()
         prefs.save()
         self._render()
+
+    def _toggle_audio(self) -> None:
+        """开/关背景音乐；放不出来就退回「关」，并把原因说清楚。"""
+        if prefs.get("audio") == "on":
+            prefs.put("audio", "off")
+            audio.BGM.stop()
+            return
+        path = paths.asset("assets", "bgm", "bgm_01.mp4")
+        if audio.BGM.start(self._root, str(path)):
+            prefs.put("audio", "on")
+            return
+        prefs.put("audio", "off")
+        reason = audio.BGM.reason or "本机无法解码这个音频"
+        try:
+            messagebox.showinfo("音频不可用",
+                                f"{reason}\n\n游戏其余功能不受影响。",
+                                parent=self._root)
+        except tk.TclError:
+            pass
 
     def _toggle_display(self) -> None:
         prefs.put("display", "windowed" if prefs.get("display") == "fullscreen" else "fullscreen")

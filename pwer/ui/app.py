@@ -12,7 +12,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from .. import ma, paths
+from .. import audio, ma, paths
 from ..company import Company
 from ..constants import (
     ANTITRUST_SHARE,
@@ -26,11 +26,19 @@ from ..constants import (
     UI_ACCENT,
     UI_BAD,
     UI_BG,
+    UI_BLUE,
     UI_DIM,
+    UI_DIM2,
     UI_GOOD,
+    UI_HOVER,
     UI_PANEL,
+    UI_PANEL2,
+    UI_RED,
+    UI_RULE,
+    UI_SEL,
     UI_TEXT,
     UI_WARN,
+    UI_YELLOW,
     money,
 )
 from ..engine import Game
@@ -41,13 +49,13 @@ from .mapview import MapView, tile_tooltip
 scale.enable_dpi_awareness()
 
 FONT = "Microsoft YaHei UI"
-BG2 = "#1b1e24"
+BG2 = UI_PANEL2
 TS_LOGICAL = 36          # 每格逻辑像素（乘 DPI 缩放）
 WIN_W, WIN_H = 1240, 736
 # 股市配色：沿用 A 股习惯「红涨绿跌」。财报里的盈亏仍用 UI_GOOD/UI_BAD，两者语义不同：
 #   涨跌 = 相对上一根 K 线的方向；盈亏 = 经营结果的好坏。
-K_UP = "#d95b52"
-K_DOWN = "#43a06b"
+K_UP = UI_RED
+K_DOWN = UI_GOOD
 
 
 def chg_pct(co: Company) -> float:
@@ -85,6 +93,8 @@ class App(tk.Tk):
         self._style()
         self._menu()
         self._apply_display()              # 放在 _menu 之后：全屏要把菜单栏一起收起来
+        self._apply_audio()                # 背景音乐按偏好起（默认关）
+        self.after(1500, self._bgm_tick)   # 循环播放靠定时器：播完就从头再来
         self._build_buildbar()             # 红：底部建造条（先占位，保证地图吃剩下的空间）
         self._build_top()                  # 青：数据条 + 蓝：时间块
         body = tk.Frame(self, bg=UI_BG)
@@ -122,6 +132,7 @@ class App(tk.Tk):
     def _start_new(self) -> None:
         self.start = None
         self._apply_display()              # 菜单栏/全屏状态交还给游戏
+        self._apply_audio()                # 启动页可能刚改过音频开关
         self._bind_keys()
         self.game = Game.new_game(self._seed)
         self.refresh()
@@ -132,6 +143,7 @@ class App(tk.Tk):
     def _start_continue(self, game) -> None:
         self.start = None
         self._apply_display()
+        self._apply_audio()
         self._bind_keys()
         self.game = game
         self.build_mode = None
@@ -149,6 +161,36 @@ class App(tk.Tk):
         self.bind("<Control-Key-1>", lambda e: self.toggle_panel("policy"))
         self.bind("<Control-Key-2>", lambda e: self.toggle_panel("stock"))
         self.bind("<Control-Key-3>", lambda e: self.toggle_panel("company"))
+
+    def _unbind_keys(self) -> None:
+        """回主菜单时把游戏内的快捷键摘掉，免得和启动页抢键。"""
+        for seq in ("<Control-Return>", "<Escape>", "<F11>",
+                    "<Control-Key-1>", "<Control-Key-2>", "<Control-Key-3>"):
+            try:
+                self.unbind(seq)
+            except tk.TclError:
+                pass
+
+    def back_to_menu(self) -> None:
+        """游戏内 → 主菜单：进度先落自动存档，再铺回启动页（窗口不重建）。"""
+        if getattr(self, "start", None) is not None:
+            return
+        try:
+            ok = messagebox.askyesno("返回菜单",
+                                     "返回主菜单？当前进度会写入自动存档。",
+                                     parent=self)
+        except tk.TclError:
+            ok = True
+        if not ok:
+            return
+        self.save_game(silent=True)
+        self.build_mode = None
+        self.map.build_mode = None
+        self.map.valid_tiles = set()
+        self.selected = None
+        self.toggle_panel(None)
+        self._unbind_keys()
+        self.open_start()
 
     def _apply_display(self) -> None:
         """跟启动页共用同一个偏好：全屏就真全屏（连标题栏、任务栏、菜单栏一起让位）。"""
@@ -172,6 +214,34 @@ class App(tk.Tk):
         self._apply_display()
         self.after(120, self._fit_map)
 
+    # ------------------------------------------------------------ 背景音乐
+    def _apply_audio(self) -> None:
+        """按偏好开/关 BGM；启动页改过开关，进游戏时以偏好为准。"""
+        if prefs.get("audio") != "on":
+            audio.BGM.stop()
+            return
+        path = str(paths.asset("assets", "bgm", "bgm_01.mp4"))
+        if audio.BGM.available() and audio.BGM.path == path:
+            return
+        if not audio.BGM.start(self, path):
+            # 放不出来就别留着"开"的假状态
+            prefs.put("audio", "off")
+            prefs.save()
+
+    def _bgm_tick(self) -> None:
+        try:
+            audio.BGM.poll()
+        except Exception:  # noqa: BLE001
+            pass
+        self.after(1500, self._bgm_tick)
+
+    def destroy(self) -> None:
+        try:
+            audio.BGM.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        super().destroy()
+
     def _on_escape(self, _e=None) -> None:
         if self.build_mode:
             self.cancel_build()
@@ -185,27 +255,40 @@ class App(tk.Tk):
         st.configure(".", background=UI_PANEL, foreground=UI_TEXT, font=(FONT, 9))
         st.configure("TFrame", background=UI_PANEL)
         st.configure("TNotebook", background=UI_BG, borderwidth=0)
-        st.configure("TNotebook.Tab", background="#2c313a", foreground=UI_DIM,
+        st.configure("TNotebook.Tab", background=UI_PANEL2, foreground=UI_DIM,
                      padding=(scale.px(12), scale.px(6)), font=(FONT, 10))
         st.map("TNotebook.Tab", background=[("selected", UI_PANEL)],
                foreground=[("selected", UI_ACCENT)])
         st.configure("Treeview", background=BG2, fieldbackground=BG2,
                      foreground=UI_TEXT, rowheight=scale.px(20), borderwidth=0)
-        st.configure("Treeview.Heading", background="#2c313a", foreground=UI_DIM,
+        st.configure("Treeview.Heading", background=UI_PANEL2, foreground=UI_DIM,
                      font=(FONT, 9, "bold"))
-        st.map("Treeview", background=[("selected", "#35507a")],
-               foreground=[("selected", "#ffffff")])
-        st.configure("TButton", background="#333a45", foreground=UI_TEXT,
+        st.map("Treeview", background=[("selected", UI_SEL)],
+               foreground=[("selected", UI_TEXT)])
+        st.configure("TButton", background=UI_PANEL2, foreground=UI_TEXT,
                      padding=(scale.px(8), scale.px(4)))
-        st.map("TButton", background=[("active", "#414a58")])
-        st.configure("Accent.TButton", background="#2f6fb5", foreground="white",
+        st.map("TButton", background=[("active", UI_HOVER)])
+        st.configure("Accent.TButton", background=UI_RED, foreground="white",
                      padding=(scale.px(12), scale.px(7)), font=(FONT, 11, "bold"))
-        st.map("Accent.TButton", background=[("active", "#3d86d6")])
+        st.map("Accent.TButton", background=[("active", UI_RED)])
         st.configure("Small.TButton", padding=(scale.px(4), scale.px(2)), font=(FONT, 8))
         st.configure("TLabel", background=UI_PANEL, foreground=UI_TEXT)
         st.configure("TSpinbox", fieldbackground=BG2, foreground=UI_TEXT,
-                     background="#333a45", arrowcolor=UI_TEXT)
-        st.configure("TScale", background=UI_PANEL, troughcolor="#2c313a")
+                     background=UI_PANEL2, arrowcolor=UI_TEXT)
+        st.configure("TScale", background=UI_PANEL, troughcolor=UI_PANEL2)
+        st.configure("Dark.Vertical.TScrollbar", gripcount=0,
+                     background=UI_HOVER, darkcolor=UI_PANEL, lightcolor=UI_PANEL,
+                     troughcolor=UI_BG, bordercolor=UI_BG, arrowcolor=UI_DIM,
+                     arrowsize=scale.px(9), relief="flat", borderwidth=0)
+        st.map("Dark.Vertical.TScrollbar",
+               background=[("active", UI_RED), ("pressed", UI_RED)])
+        st.configure("Dark.TSpinbox", fieldbackground=UI_PANEL2,
+                     background=UI_PANEL2, foreground=UI_TEXT, insertcolor=UI_TEXT,
+                     arrowcolor=UI_DIM, bordercolor=UI_RULE,
+                     lightcolor=UI_PANEL2, darkcolor=UI_PANEL2,
+                     selectbackground=UI_SEL, selectforeground=UI_TEXT)
+        st.map("Dark.TSpinbox", foreground=[("disabled", UI_DIM)],
+               fieldbackground=[("disabled", UI_PANEL2)])
 
     def _menu(self) -> None:
         bar = tk.Menu(self, bg=UI_PANEL, fg=UI_TEXT, tearoff=0)
@@ -226,31 +309,31 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 顶部：数据条 + 时间块
     def _build_top(self) -> None:
         P = scale.px
-        top = tk.Frame(self, bg="#15181d", height=P(84))
+        top = tk.Frame(self, bg=UI_BG, height=P(84))
         top.pack(fill="x", side="top")
         top.pack_propagate(False)
 
         # 蓝：时间块（右上）——回合 / 年季 / 结束回合
-        time_box = tk.Frame(top, bg="#1b2b4d", width=P(340))
+        time_box = tk.Frame(top, bg=UI_BLUE, width=P(340))
         time_box.pack(side="right", fill="y")
         time_box.pack_propagate(False)
-        self.lbl_turn = tk.Label(time_box, text="", bg="#1b2b4d", fg="#ffffff",
+        self.lbl_turn = tk.Label(time_box, text="", bg=UI_BLUE, fg=UI_TEXT,
                                  font=(FONT, 12, "bold"), anchor="w")
         self.lbl_turn.pack(fill="x", padx=P(12), pady=(P(8), 0))
-        row = tk.Frame(time_box, bg="#1b2b4d")
+        row = tk.Frame(time_box, bg=UI_BLUE)
         row.pack(fill="x", padx=P(12), pady=(P(2), P(8)))
-        self.lbl_season = tk.Label(row, text="", bg="#1b2b4d", fg="#9fb6e0",
+        self.lbl_season = tk.Label(row, text="", bg=UI_BLUE, fg=UI_DIM,
                                    font=(FONT, 8), anchor="w")
         self.lbl_season.pack(side="left")
         self.btn_end = ttk.Button(row, text="结束回合 ▶", command=self.end_turn,
                                   style="Accent.TButton")
         self.btn_end.pack(side="right")
 
-        # 青：数据条（左上），底部 3px 青色边对应设计稿的"数据显示"
-        stats = tk.Frame(top, bg="#15181d")
+        # 青：数据条（左上），底部 1px 细线与启动页的页脚线同一套规矩
+        stats = tk.Frame(top, bg=UI_BG)
         stats.pack(side="left", fill="both", expand=True)
-        tk.Frame(stats, bg="#3f9c8f", height=P(3)).pack(side="bottom", fill="x")
-        inner = tk.Frame(stats, bg="#15181d")
+        tk.Frame(stats, bg=UI_RULE, height=P(1)).pack(side="bottom", fill="x")
+        inner = tk.Frame(stats, bg=UI_BG)
         inner.pack(fill="x", padx=P(10), pady=(P(5), 0))
         self.top_stats = {}
         for key, label, color in (
@@ -258,22 +341,22 @@ class App(tk.Tk):
             ("price", "股价", UI_ACCENT), ("cap", "市值", UI_GOOD),
             ("share", "市占", UI_WARN), ("policy", "监管阶段", UI_DIM),
         ):
-            f = tk.Frame(inner, bg="#15181d")
+            f = tk.Frame(inner, bg=UI_BG)
             f.pack(side="left", padx=P(8))
-            tk.Label(f, text=label, bg="#15181d", fg="#6f7784",
+            tk.Label(f, text=label, bg=UI_BG, fg=UI_DIM,
                      font=(FONT, 8)).pack(anchor="w")
-            lab = tk.Label(f, text="-", bg="#15181d", fg=color, font=(FONT, 11, "bold"))
+            lab = tk.Label(f, text="-", bg=UI_BG, fg=color, font=(FONT, 11, "bold"))
             lab.pack(anchor="w")
             self.top_stats[key] = lab
 
     # ------------------------------------------------------------ 左轨：页签 + 其它按钮
     def _build_rail(self, parent) -> None:
         P = scale.px
-        rail = tk.Frame(parent, bg="#12151a", width=P(116))
+        rail = tk.Frame(parent, bg=UI_BG, width=P(116))
         rail.pack(side="left", fill="y")
         rail.pack_propagate(False)
-        tk.Frame(rail, bg="#f2e600", width=P(3)).pack(side="left", fill="y")
-        inner = tk.Frame(rail, bg="#12151a")
+        tk.Frame(rail, bg=UI_YELLOW, width=P(3)).pack(side="left", fill="y")
+        inner = tk.Frame(rail, bg=UI_BG)
         inner.pack(side="left", fill="both", expand=True, padx=(P(8), P(6)), pady=P(10))
 
         self.rail_items: dict[str, dict] = {}
@@ -282,28 +365,32 @@ class App(tk.Tk):
                             ("company", "公司", "COMPANY")):
             self.rail_items[key] = self._rail_button(inner, key, zh, en)
 
-        tk.Frame(inner, bg="#2b2f36", height=1).pack(fill="x", pady=P(10))
-        tk.Label(inner, text="其它", bg="#12151a", fg="#4f5a4a", font=(FONT, 7),
+        tk.Frame(inner, bg=UI_RULE, height=1).pack(fill="x", pady=P(10))
+        tk.Label(inner, text="其它 / MORE", bg=UI_BG, fg=UI_DIM2, font=(FONT, 7),
                  anchor="w").pack(fill="x", pady=(0, P(2)))
-        for label, cmd in (("存档", self.save_game), ("读档", self.load_game),
-                           ("规则", self.show_rules), ("退出", self.destroy)):
-            tk.Button(inner, text=label, command=cmd, bg="#16211a", fg="#8fd6a8",
-                      activebackground="#22372a", activeforeground="#b7f0c8",
+        for label, cmd in (("菜单", self.back_to_menu), ("存档", self.save_game),
+                           ("读档", self.load_game), ("规则", self.show_rules)):
+            tk.Button(inner, text=label, command=cmd, bg=UI_PANEL2, fg=UI_DIM,
+                      activebackground=UI_HOVER, activeforeground=UI_TEXT,
                       bd=0, relief="flat", font=(FONT, 9), anchor="w",
                       padx=P(8), pady=P(5), cursor="hand2").pack(fill="x", pady=P(2))
+        tk.Button(inner, text="退出", command=self.destroy, bg=UI_RED, fg=UI_TEXT,
+                  activebackground="#FF3B30", activeforeground=UI_TEXT,
+                  bd=0, relief="flat", font=(FONT, 9, "bold"), anchor="w",
+                  padx=P(8), pady=P(5), cursor="hand2").pack(fill="x", pady=(P(10), P(2)))
 
     def _rail_button(self, parent, key: str, zh: str, en: str) -> dict:
         P = scale.px
-        box = tk.Frame(parent, bg="#1a1e25", cursor="hand2")
+        box = tk.Frame(parent, bg=UI_PANEL2, cursor="hand2")
         box.pack(fill="x", pady=P(3))
-        bar = tk.Frame(box, bg="#12151a", width=P(3))
+        bar = tk.Frame(box, bg=UI_BG, width=P(3))
         bar.pack(side="left", fill="y")
-        txt = tk.Frame(box, bg="#1a1e25")
+        txt = tk.Frame(box, bg=UI_PANEL2)
         txt.pack(side="left", fill="both", expand=True, padx=P(8), pady=P(6))
-        zh_lbl = tk.Label(txt, text=zh, bg="#1a1e25", fg="#e6e6e6",
+        zh_lbl = tk.Label(txt, text=zh, bg=UI_PANEL2, fg=UI_TEXT,
                           font=(FONT, 11, "bold"), anchor="w")
         zh_lbl.pack(fill="x")
-        en_lbl = tk.Label(txt, text=en, bg="#1a1e25", fg="#6f7784",
+        en_lbl = tk.Label(txt, text=en, bg=UI_PANEL2, fg=UI_DIM,
                           font=(FONT, 7), anchor="w")
         en_lbl.pack(fill="x")
         widgets = (box, bar, txt, zh_lbl, en_lbl)
@@ -314,12 +401,12 @@ class App(tk.Tk):
     def _sync_rail(self) -> None:
         for key, it in self.rail_items.items():
             on = (self.panel == key)
-            bg = "#2b2a12" if on else "#1a1e25"
+            bg = UI_RED if on else UI_PANEL2
             it["box"].config(bg=bg)
             it["txt"].config(bg=bg)
-            it["zh"].config(bg=bg, fg="#f2e600" if on else "#e6e6e6")
-            it["en"].config(bg=bg, fg="#b8ad3a" if on else "#6f7784")
-            it["bar"].config(bg="#f2e600" if on else "#12151a")
+            it["zh"].config(bg=bg, fg=UI_TEXT)
+            it["en"].config(bg=bg, fg="#F6D9D6" if on else UI_DIM)
+            it["bar"].config(bg=UI_YELLOW if on else UI_BG)
 
     # ------------------------------------------------------------ 中间：地图 + 抽屉
     def _build_stage(self, parent) -> None:
@@ -341,18 +428,34 @@ class App(tk.Tk):
 
         # 抽屉：选中左侧页签时盖在地图右侧，不挤压地图
         self.drawer = tk.Frame(stage, bg=UI_PANEL, highlightthickness=1,
-                               highlightbackground="#2f3540")
-        head = tk.Frame(self.drawer, bg="#1a1e25")
+                               highlightbackground=UI_RULE)
+        head = tk.Frame(self.drawer, bg=UI_PANEL2)
         head.pack(fill="x")
-        self.drawer_title = tk.Label(head, text="", bg="#1a1e25", fg=UI_TEXT,
+        self.drawer_title = tk.Label(head, text="", bg=UI_PANEL2, fg=UI_TEXT,
                                      font=(FONT, 10, "bold"), anchor="w")
         self.drawer_title.pack(side="left", padx=P(10), pady=P(6))
         tk.Button(head, text="✕", command=lambda: self.toggle_panel(None),
-                  bg="#1a1e25", fg="#8a93a3", activebackground="#242a33",
+                  bg=UI_PANEL2, fg=UI_DIM, activebackground=UI_HOVER,
                   bd=0, relief="flat", font=(FONT, 9),
                   cursor="hand2").pack(side="right", padx=P(6))
-        body = tk.Frame(self.drawer, bg=UI_PANEL)
-        body.pack(fill="both", expand=True)
+        # 抽屉内容可滚动：运营页在 1240×736 下装不满，硬挤压会把「分红率」切掉
+        body_outer = tk.Frame(self.drawer, bg=UI_PANEL)
+        body_outer.pack(fill="both", expand=True)
+        self._scroll_canvas = tk.Canvas(body_outer, bg=UI_PANEL, highlightthickness=0,
+                                        bd=0, takefocus=0)
+        sbar = ttk.Scrollbar(body_outer, orient="vertical",
+                             command=self._scroll_canvas.yview,
+                             style="Dark.Vertical.TScrollbar")
+        self._scroll_canvas.configure(yscrollcommand=sbar.set)
+        sbar.pack(side="right", fill="y")
+        self._scroll_canvas.pack(side="left", fill="both", expand=True)
+        body = tk.Frame(self._scroll_canvas, bg=UI_PANEL)
+        self._scroll_win = self._scroll_canvas.create_window((0, 0), window=body,
+                                                             anchor="nw")
+        body.bind("<Configure>", self._on_drawer_body)
+        self._scroll_canvas.bind("<Configure>", self._on_drawer_canvas)
+        self._scroll_canvas.bind("<Enter>", self._wheel_on)
+        self._scroll_canvas.bind("<Leave>", self._wheel_off)
         self.drawer_body = body
 
         self.tab_log = tk.Frame(body, bg=UI_PANEL)
@@ -363,6 +466,22 @@ class App(tk.Tk):
         self._build_company(self._co_panel)
 
         stage.bind("<Configure>", self._on_stage_resize)
+
+    # ------------------------------------------------------------ 抽屉滚动
+    def _on_drawer_body(self, _e=None) -> None:
+        self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
+
+    def _on_drawer_canvas(self, e) -> None:
+        self._scroll_canvas.itemconfigure(self._scroll_win, width=e.width)
+
+    def _wheel_on(self, _e=None) -> None:
+        self._scroll_canvas.bind_all("<MouseWheel>", self._on_wheel)
+
+    def _wheel_off(self, _e=None) -> None:
+        self._scroll_canvas.unbind_all("<MouseWheel>")
+
+    def _on_wheel(self, e) -> None:
+        self._scroll_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
 
     # ------------------------------------------------------------ 公司面板（运营 / 财报）
     def _build_company(self, root) -> None:
@@ -469,13 +588,13 @@ class App(tk.Tk):
                      font=(FONT, 9, "bold")).pack(side="left")
             tk.Scale(row, variable=var, from_=150, to=1200, resolution=5,
                      orient="horizontal", bg=UI_PANEL, fg=UI_TEXT, showvalue=0,
-                     troughcolor="#3d4655", activebackground=UI_ACCENT,
+                     troughcolor=UI_HOVER, activebackground=UI_ACCENT,
                      sliderrelief="flat", highlightthickness=0, bd=0,
-                     length=P(300), sliderlength=P(16),
+                     length=P(232), sliderlength=P(16),
                      command=lambda v: self.on_price_change()).pack(side="left", padx=P(3))
             tk.Label(row, textvariable=var, bg=UI_PANEL, fg=UI_ACCENT, width=4,
                      font=(FONT, 10, "bold")).pack(side="left", padx=P(4))
-            tk.Label(row, text=hint, bg=UI_PANEL, fg="#6f7784",
+            tk.Label(row, text=hint, bg=UI_PANEL, fg=UI_DIM,
                      font=(FONT, 8)).pack(side="left")
         self.lbl_cost = tk.Label(box, text="", bg=UI_PANEL, fg=UI_DIM, font=(FONT, 8),
                                  justify="left", anchor="w")
@@ -502,7 +621,7 @@ class App(tk.Tk):
                         ("cost", "已投", 90)):
             self.tv_projects.heading(c, text=t)
             self.tv_projects.column(c, width=P(w), anchor="center")
-        self.tv_projects.tag_configure("empty", foreground="#6f7784")
+        self.tv_projects.tag_configure("empty", foreground=UI_DIM)
         self.tv_projects.pack(fill="x", pady=(P(3), 0))
 
         box = tk.Frame(root, bg=UI_PANEL)
@@ -524,13 +643,13 @@ class App(tk.Tk):
         self.var_payout = tk.DoubleVar(value=0.35)
         tk.Scale(row2, variable=self.var_payout, from_=0.0, to=DIVIDEND_MAX,
                  resolution=0.05, orient="horizontal", bg=UI_PANEL, fg=UI_TEXT,
-                 showvalue=0, troughcolor="#3d4655", activebackground=UI_ACCENT,
+                 showvalue=0, troughcolor=UI_HOVER, activebackground=UI_ACCENT,
                  sliderrelief="flat", highlightthickness=0, bd=0, length=P(200),
                  sliderlength=P(16),
                  command=lambda v: self.on_payout()).pack(side="left", padx=P(4))
-        self.lbl_subsidy = tk.Label(row2, text="", bg=UI_PANEL, fg=UI_DIM,
-                                    font=(FONT, 8))
-        self.lbl_subsidy.pack(side="left")
+        self.lbl_subsidy = tk.Label(box, text="", bg=UI_PANEL, fg=UI_DIM,
+                                    font=(FONT, 8), anchor="w")
+        self.lbl_subsidy.pack(fill="x")
 
     # ------------------------------------------------------------ 财报页
     def _build_fin(self, root) -> None:
@@ -550,7 +669,7 @@ class App(tk.Tk):
         self.tv_fin.column("val", width=P(150), anchor="e")
         self.tv_fin.pack(fill="both", expand=True, padx=P(8))
         self.tv_fin.tag_configure("cost", foreground="#d99a9a")
-        self.tv_fin.tag_configure("sum", foreground="#ffffff", background="#2c313a")
+        self.tv_fin.tag_configure("sum", foreground=UI_TEXT, background=UI_PANEL2)
         self.tv_fin.tag_configure("profit", foreground=UI_GOOD)
 
         box = tk.Frame(root, bg=UI_PANEL)
@@ -598,7 +717,7 @@ class App(tk.Tk):
                  font=(FONT, 9)).pack(side="left")
         self.var_qty = tk.StringVar(value="2")
         ttk.Spinbox(ctrl, from_=0.5, to=20, increment=0.5, width=5,
-                    textvariable=self.var_qty).pack(side="left", padx=P(3))
+                    textvariable=self.var_qty, style="Dark.TSpinbox").pack(side="left", padx=P(3))
         self.lbl_deal = tk.Label(ctrl, text="", bg=UI_PANEL, fg=UI_DIM, font=(FONT, 8))
         self.lbl_deal.pack(side="left", padx=P(4))
 
@@ -638,7 +757,7 @@ class App(tk.Tk):
                    style="Small.TButton").pack(side="left")
         tk.Label(root, text="对手情报（机组 / 电价 / 财务风险）", bg=UI_PANEL, fg=UI_ACCENT,
                  font=(FONT, 10, "bold")).pack(anchor="w", padx=P(8), pady=(P(4), P(2)))
-        self.txt_intel = tk.Text(root, bg=BG2, fg="#c9cfd8", bd=0, height=2, wrap="word",
+        self.txt_intel = tk.Text(root, bg=BG2, fg=UI_TEXT, bd=0, height=2, wrap="word",
                                  font=(FONT, 9), highlightthickness=0, padx=P(6), pady=P(4))
         self.txt_intel.pack(fill="both", expand=True, padx=P(8), pady=(0, P(8)))
         self.txt_intel.configure(state="disabled")
@@ -692,9 +811,9 @@ class App(tk.Tk):
         for i in range(5):                      # 网格 + 右侧价格刻度
             v = hi - (hi - lo) * i / 4
             y = yy(v)
-            cv.create_line(pad_l, y, pad_l + pw, y, fill="#2a2f38")
+            cv.create_line(pad_l, y, pad_l + pw, y, fill=UI_RULE)
             cv.create_text(pad_l + pw + P(6), y, text=f"{v:.1f}", anchor="w",
-                           fill="#6f7784", font=(FONT, 7))
+                           fill=UI_DIM, font=(FONT, 7))
 
         n = len(candles)
         slot = pw / max(1, n)
@@ -711,18 +830,18 @@ class App(tk.Tk):
 
         last = candles[-1]
         y = yy(last[3])
-        cv.create_line(pad_l, y, pad_l + pw, y, fill="#565d6b", dash=(2, 3))
+        cv.create_line(pad_l, y, pad_l + pw, y, fill=UI_DIM2, dash=(2, 3))
         # 最新价用色块贴标，避免和右侧刻度数字叠在一起看不清
         tag_x = pad_l + pw + P(3)
         cv.create_rectangle(tag_x, y - P(8), tag_x + P(46), y + P(8),
                             fill=K_UP if last[3] >= last[0] else K_DOWN, outline="")
-        cv.create_text(tag_x + P(23), y, text=f"{last[3]:.2f}", fill="#ffffff",
+        cv.create_text(tag_x + P(23), y, text=f"{last[3]:.2f}", fill=UI_TEXT,
                        font=(FONT, 8, "bold"))
         last_turn = self.game.turn if live else self.game.turn - 1
         cv.create_text(pad_l + P(2), h - P(3), text=f"T{last_turn - n + 1}",
-                       anchor="sw", fill="#6f7784", font=(FONT, 7))
+                       anchor="sw", fill=UI_DIM, font=(FONT, 7))
         cv.create_text(pad_l + pw, h - P(3), text=f"T{last_turn}",
-                       anchor="se", fill="#6f7784", font=(FONT, 7))
+                       anchor="se", fill=UI_DIM, font=(FONT, 7))
 
         o, hh, ll, c = last
         chg = (c / candles[-2][3] - 1.0) * 100 if n > 1 else 0.0
@@ -747,7 +866,7 @@ class App(tk.Tk):
         self.lbl_weather = tk.Label(top, text="", bg=UI_PANEL, fg=UI_DIM,
                                     font=(FONT, 9), justify="left", anchor="w")
         self.lbl_weather.pack(fill="x", pady=(0, P(4)))
-        self.txt_log = tk.Text(root, bg=BG2, fg="#c9cfd8", bd=0, wrap="word",
+        self.txt_log = tk.Text(root, bg=BG2, fg=UI_TEXT, bd=0, wrap="word",
                                font=(FONT, 9), highlightthickness=0,
                                padx=P(6), pady=P(4))
         self.txt_log.pack(fill="both", expand=True, padx=P(8), pady=(0, P(8)))
@@ -756,15 +875,15 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 底部：建造条
     def _build_buildbar(self) -> None:
         P = scale.px
-        bar = tk.Frame(self, bg="#15181d")
+        bar = tk.Frame(self, bg=UI_BG)
         bar.pack(fill="x", side="bottom")
-        tk.Frame(bar, bg="#d9534f", height=P(3)).pack(side="top", fill="x")
-        inner = tk.Frame(bar, bg="#15181d")
+        tk.Frame(bar, bg=UI_RED, height=P(3)).pack(side="top", fill="x")
+        inner = tk.Frame(bar, bg=UI_BG)
         inner.pack(fill="x", padx=P(10), pady=P(5))
 
-        left = tk.Frame(inner, bg="#15181d")
+        left = tk.Frame(inner, bg=UI_BG)
         left.pack(side="left")
-        tk.Label(left, text="建造", bg="#15181d", fg="#e8b4b0",
+        tk.Label(left, text="建造", bg=UI_BG, fg="#e8b4b0",
                  font=(FONT, 9, "bold")).grid(row=0, column=0, sticky="w", padx=(0, P(4)))
         self.build_buttons: dict[str, ttk.Button] = {}
         items = [(k, PLANT_SPECS[k]) for k in PLANT_SPECS] + \
@@ -779,13 +898,13 @@ class App(tk.Tk):
         ttk.Button(left, text="取消", command=self.cancel_build,
                    style="Small.TButton").grid(row=0, column=7, padx=(P(6), 0), sticky="w")
 
-        right = tk.Frame(inner, bg="#15181d")
+        right = tk.Frame(inner, bg=UI_BG)
         right.pack(side="right", fill="x", expand=True, padx=(P(12), 0))
         self.lbl_hint = tk.Label(right, text="选择建造类型 → 点地图放置；Esc 取消",
-                                 bg="#15181d", fg=UI_DIM, font=(FONT, 9), anchor="e")
+                                 bg=UI_BG, fg=UI_DIM, font=(FONT, 9), anchor="e")
         self.lbl_hint.pack(fill="x")
         # 内联校验：钱不够/没地块的类型直接置灰，并说明原因
-        self.lbl_build_info = tk.Label(right, text="", bg="#15181d", fg=UI_DIM,
+        self.lbl_build_info = tk.Label(right, text="", bg=UI_BG, fg=UI_DIM,
                                        font=(FONT, 8), anchor="e", justify="right")
         self.lbl_build_info.pack(fill="x")
 
@@ -1163,12 +1282,13 @@ class App(tk.Tk):
         self.var_payout.set(round(me.payout, 2))
 
         self.lbl_funds.config(
-            text=f"现金 {money(me.cash)}    负债 {money(me.debt)}     "
-                 f"负债率 {me.debt_ratio():.0%}（上限 {LOAN_LIMIT_RATIO:.0%}）    "
+            text=f"现金 {money(me.cash)} · 负债 {money(me.debt)} · "
+                 f"负债率 {me.debt_ratio():.0%}（上限 {LOAN_LIMIT_RATIO:.0%}）\n"
                  f"剩余额度 {money(max(0.0, me.assets() * LOAN_LIMIT_RATIO - me.debt))}")
         self.lbl_staff.config(
-            text=f"运营班组 {me.ops_staff}/{me.staff_need()}（满足率 {me.staff_ratio():.0%}，缺人压出力）  "
-                 f"工程队 {me.eng_teams}（在建 {len(me.projects)} 项）  声望 {me.reputation:.0f}")
+            text=f"运营班组 {me.ops_staff}/{me.staff_need()}（满足率 {me.staff_ratio():.0%}，缺人压出力） · "
+                 f"工程队 {me.eng_teams}（在建 {len(me.projects)} 项）\n"
+                 f"声望 {me.reputation:.0f}")
         self.lbl_subsidy.config(text=f"新能源 {me.renewable_share():.0%}"
                                      f"/配额 {g.policy.renewable_quota:.0%}")
         self.update_cost_label()
@@ -1324,7 +1444,7 @@ class App(tk.Tk):
                 self._sub_keys.append(f"{co.idx}|{p.id}")
         if not self._sub_keys:
             self.lb_subs.insert("end", "尚未控股任何公司（持股 51% 后可在此处置其机组）")
-            self.lb_subs.itemconfig(0, foreground="#6f7784")
+            self.lb_subs.itemconfig(0, foreground=UI_DIM)
         self._refresh_intel()
         self.refresh_mkt_controls()
         self.draw_kline()
@@ -1392,7 +1512,7 @@ class App(tk.Tk):
             y = h - scale.px(8) - (v - lo) / rng * (h - scale.px(16))
             pts.append((x, y))
         zero_y = h - scale.px(8) - (0 - lo) / rng * (h - scale.px(16))
-        c.create_line(0, zero_y, w, zero_y, fill="#3a3f47", dash=(2, 2))
+        c.create_line(0, zero_y, w, zero_y, fill=UI_RULE, dash=(2, 2))
         flat = [coord for p in pts for coord in p]
         if len(flat) >= 4:
             c.create_line(*flat, fill=UI_ACCENT, width=2, smooth=True)

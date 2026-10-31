@@ -1,4 +1,4 @@
-"""启动页偏好：只存三件事（启动页显示方式 / 自动存档 / 语言）。
+"""启动页偏好：只存四件事（显示方式 / 自动存档 / 语言 / 背景音乐）。
 
 存档位置跟着 `paths.data_dir()` 走，与游戏存档同目录，避免又多一个路径分支。
 读失败一律回落到默认值——配置文件坏掉不该让游戏起不来。
@@ -14,6 +14,7 @@ DEFAULTS: dict[str, Any] = {
     "display": "fullscreen",   # fullscreen / windowed
     "autosave": True,
     "language": "zh",
+    "audio": "off",            # off / on —— 默认不出声，玩家自己开
 }
 
 _cache: dict[str, Any] | None = None
