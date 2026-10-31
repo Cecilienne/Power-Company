@@ -49,6 +49,8 @@ PANEL_X, PANEL_Y, PANEL_W, PANEL_H = 560, 400, 1264, 460
 PANEL_L, PANEL_R = 600, 1784
 STATUS_X, STATUS_Y, STATUS_W, STATUS_H = 96, 900, 404, 80
 ROWS_Y, ROW_H = 512, 50
+# 页脚左侧的退出按钮：坐在页脚线（y=992）下方，与右侧版权行同一条基线
+QUIT_X, QUIT_Y, QUIT_W, QUIT_H = 96, 1000, 192, 50
 
 ITEMS = (
     ("new", "01", "开始", "NEW GAME"),
@@ -100,6 +102,7 @@ class StartScreen(tk.Frame):
         self.sel = "new"
         self.row = 0                     # 设置面板内的行焦点
         self.hover: str | None = None
+        self.hover_row: int | None = None  # 鼠标悬停的可点设置行
         self._k = 1.0
         self._ox = self._oy = 0.0
         self._fonts: dict[tuple, tkfont.Font] = {}
@@ -268,6 +271,7 @@ class StartScreen(tk.Frame):
         self._draw_panel()
         self._draw_status()
         self._draw_footer()
+        self._draw_quit()
 
     def _draw_menu_label(self) -> None:
         self._rect(MENU_X, 92, 10, 10, UI_START_RED)
@@ -360,8 +364,15 @@ class StartScreen(tk.Frame):
 
     def _row(self, i: int, num: str, zh: str, en: str, value: str, *,
              emphasis: bool = False, size: float = 15, focus: bool = False,
-             arrow: bool = False) -> None:
+             arrow: bool = False, hover: bool = False) -> None:
         y = ROWS_Y + i * ROW_H
+        if hover:
+            # 可点的行给一块压深的黄底：鼠标扫过就知道这行能按
+            self.cv.create_rectangle(self.X(PANEL_L - 22), self.Y(y + 3),
+                                     self.X(PANEL_R + 16), self.Y(y + ROW_H - 3),
+                                     fill="#DCD000", outline="")
+            if not focus:
+                self._rect(PANEL_L - 22, y + 3, 3, ROW_H - 6, UI_START_RED)
         if focus:
             self._rect(PANEL_L - 18, y + 8, 4, ROW_H - 16, UI_START_BG)
         self._t(PANEL_L, y + 14, num, 9, "#6B6318", F_LAT, 2.0)
@@ -387,6 +398,14 @@ class StartScreen(tk.Frame):
             ("06", "数据校验", "DATA CHECK", chk, False, True),
         ]
 
+    def _row_action(self, i: int) -> str | None:
+        """设置面板第 i 行按下去做什么；None 表示这行只是信息，点不动。"""
+        rows = self._settings_rows()
+        if not (0 <= i < len(rows)):
+            return None
+        return {"显示": "display", "自动存档": "autosave",
+                "数据校验": "recheck"}.get(rows[i][1])
+
     def _panel_settings(self, editable: bool) -> None:
         self._panel_frame(
             "设置", "SETTINGS",
@@ -394,10 +413,12 @@ class StartScreen(tk.Frame):
             "EDITING" if editable else "READ-ONLY PREVIEW",
         )
         for i, (num, zh, en, val, arrow, emphasis) in enumerate(self._settings_rows()):
+            can_press = editable and self._row_action(i) is not None
             self._row(i, num, zh, en, val, emphasis=emphasis,
                       focus=(editable and self.row == i),
-                      arrow=(editable and arrow))
-        hint = ("↑↓ 选择 · ←→ 调整 · ENTER 确认 · ESC 返回" if editable
+                      arrow=(editable and arrow),
+                      hover=(can_press and self.hover_row == i))
+        hint = ("↑↓ 选择 · ←→ 调整 · 点击/ENTER 生效 · ESC 返回" if editable
                 else "↑↓ 选择 · ENTER 确认 · ESC 退出")
         self._t(PANEL_L, 838, hint, 8.5, "#4A4310", F_LAT, 2.2)
 
@@ -464,6 +485,22 @@ class StartScreen(tk.Frame):
         self._t(0, 1014, "© 2026 电力公司 · 单机 · 零第三方依赖", 8.5, "#6A6A72",
                 F_LAT, 1.6, right=PANEL_R)
 
+    def _draw_quit(self) -> None:
+        """页脚左侧的退出按钮：点它 = 按 ESC，走同一套确认。"""
+        hov = (self.hover == "quit")
+        self.cv.create_rectangle(
+            self.X(QUIT_X), self.Y(QUIT_Y),
+            self.X(QUIT_X + QUIT_W), self.Y(QUIT_Y + QUIT_H),
+            fill=UI_START_RED if hov else UI_START_BG,
+            outline=UI_START_RED if hov else "#3A3A41",
+            width=max(1.0, 1.0 * self._k))
+        sub = "#F6D9D6" if hov else UI_START_DIM2
+        self._t(QUIT_X + 16, QUIT_Y + 8, "退出", 16,
+                UI_START_INK if hov else UI_START_DIM1, F_MED)
+        self._t(QUIT_X + 17, QUIT_Y + 29, "QUIT", 7.5, sub, F_LAT, 2.4)
+        self._t(0, QUIT_Y + 21, "ESC", 8.5, sub, F_LAT, 1.6,
+                right=QUIT_X + QUIT_W - 14)
+
     # ------------------------------------------------------------ 交互
     def _hit(self, px: int, py: int) -> str | None:
         x = (px - self._ox) / self._k
@@ -475,34 +512,76 @@ class StartScreen(tk.Frame):
         i = int((y - MENU_Y) // MENU_H)
         return ITEMS[i][0]
 
+    def _hit_quit(self, px: int, py: int) -> bool:
+        x = (px - self._ox) / self._k
+        y = (py - self._oy) / self._k
+        return (QUIT_X <= x <= QUIT_X + QUIT_W
+                and QUIT_Y <= y <= QUIT_Y + QUIT_H)
+
+    def _hit_row(self, px: int, py: int) -> int | None:
+        """设置面板里第几行（0 起）。只有选中「设置」时才认这个区域。"""
+        if self.sel != "settings":
+            return None
+        x = (px - self._ox) / self._k
+        y = (py - self._oy) / self._k
+        n = len(self._settings_rows())
+        if not (PANEL_L - 22 <= x <= PANEL_R + 16):
+            return None
+        if not (ROWS_Y <= y <= ROWS_Y + n * ROW_H):
+            return None
+        return max(0, min(n - 1, int((y - ROWS_Y) // ROW_H)))
+
     def _on_motion(self, e) -> None:
         key = self._hit(e.x, e.y)
-        self._set_hover(key)
+        row: int | None = None
+        if key is None and self._hit_quit(e.x, e.y):
+            key = "quit"
+        if key is None:
+            row = self._hit_row(e.x, e.y)
+        self._set_hover(key, row)
 
-    def _set_hover(self, key: str | None) -> None:
+    def _set_hover(self, key: str | None, row: int | None = None) -> None:
         if key is not None and self._disabled(key):
             key = None
-        if key == self.hover:
+        if row is not None and self._row_action(row) is None:
+            row = None          # 信息行不给"能按"的假象
+        if key == self.hover and row == self.hover_row:
             return
         self.hover = key
+        self.hover_row = row
+        hand = (key is not None) or (row is not None)
         try:
-            self.cv.configure(cursor="hand2" if key else "")
+            self.cv.configure(cursor="hand2" if hand else "")
         except tk.TclError:
             pass
         self._render()
 
     def _on_click(self, e) -> None:
+        if self._hit_quit(e.x, e.y):
+            self._quit()
+            return
         key = self._hit(e.x, e.y)
-        if key is None or self._disabled(key):
-            return
-        if key in ("new", "continue"):
-            # 开始/继续 是一次性动作：点一下就进游戏，不做"先选中再点一次"
+        if key is not None:
+            if self._disabled(key):
+                return
+            if key in ("new", "continue"):
+                # 开始/继续 是一次性动作：点一下就进游戏，不做"先选中再点一次"
+                self.sel = key
+                self._activate(key)
+                return
             self.sel = key
-            self._activate(key)
+            self.row = 0
+            self.hover_row = None
+            self._render()
             return
-        self.sel = key
-        self.row = 0
-        self._render()
+        row = self._hit_row(e.x, e.y)
+        if row is None:
+            return
+        self.row = row
+        if self._row_action(row) is not None:
+            self._adjust(1)     # 单击 = 直接切换，不用先选中再按 ←→
+        else:
+            self._render()
 
     def _move(self, step: int) -> None:
         if self.sel == "settings":
@@ -533,7 +612,9 @@ class StartScreen(tk.Frame):
         if k in ("Up", "Down"):
             self._move(-1 if k == "Up" else 1)
         elif k in ("Return", "KP_Enter"):
-            if self.sel == "settings":
+            if self.sel == "settings" and self._row_action(self.row) is not None:
+                self._adjust(1)
+            elif self.sel == "settings":
                 self.sel = "new"
                 self._render()
             else:
@@ -555,15 +636,17 @@ class StartScreen(tk.Frame):
             self._on_display()
 
     def _adjust(self, step: int) -> None:
-        _, zh, _, _, editable, _ = self._settings_rows()[self.row]
-        if not editable:
-            return
-        if zh == "显示":
+        act = self._row_action(self.row)
+        if act is None:
+            return              # 只读行：不假装有开关
+        if act == "display":
             prefs.put("display", "windowed" if prefs.get("display") == "fullscreen" else "fullscreen")
             self._apply_display()
             self.after(60, self._render)
-        elif zh == "自动存档":
+        elif act == "autosave":
             prefs.put("autosave", not prefs.get("autosave"))
+        elif act == "recheck":
+            self.check = self._self_check()
         prefs.save()
         self._render()
 
