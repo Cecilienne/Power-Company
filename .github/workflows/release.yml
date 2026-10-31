@@ -2,6 +2,9 @@ name: release
 
 # 打 tag（v1.0.0 这种）→ 自动构建 Windows 发行包并发布 Release
 # 手动运行（Actions → release → Run workflow）→ 只构建并留 artifact，不发布
+#
+# 说明：CI 的 Windows runner 没有桌面，Tk() 建不了窗。main.py 的 --selftest
+# 在这种情况下会自动退回「只验 tcl/tk 数据」（headless），所以门禁依然有效。
 on:
   push:
     tags:
@@ -32,8 +35,21 @@ jobs:
         uses: actions/setup-python@v5
         with:
           # 与本地开发一致；setup-python 提供的 CPython 自带 tkinter/tcl-tk
-          # 若哪天 3.14 不可用，改成 "3.13" 即可（tcl/tk 同样自带）
           python-version: "3.14"
+
+      - name: 环境体检（结果写进 annotation，失败时也能看到）
+        shell: pwsh
+        run: |
+          $py = & python -c "import sys;print('Python ' + sys.version.split()[0])"
+          $tk = & python -c "import tkinter;print(tkinter.TkVersion)" 2>$null
+          if ($LASTEXITCODE -ne 0) { $tk = 'MISSING' }
+          $tcl = & python -c "import tkinter;print(tkinter.Tcl().eval('info patchlevel'))" 2>$null
+          if ($LASTEXITCODE -ne 0) { $tcl = 'FAIL' }
+          $win = & python -c "import tkinter;tkinter.Tk().destroy();print('ok')" 2>$null
+          if ($LASTEXITCODE -ne 0) { $win = 'FAIL' }
+          "python : $py"
+          "tkinter: $tk   Tcl: $tcl   建窗: $win"
+          Write-Host "::warning title=env::py=$py | tkinter=$tk | Tcl=$tcl | Tk=$win"
 
       - name: 装依赖
         run: |
@@ -56,22 +72,43 @@ jobs:
 
       - name: 打包（含产物自检门禁 + MANIFEST + zip）
         shell: cmd
-        run: build.bat
+        run: build.bat > build.log 2>&1
 
-      - name: 回显产物自检结果
+      - name: 打印构建日志（失败也执行）
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path build.log) {
+            Get-Content build.log -Encoding UTF8
+          } else {
+            Write-Host '（没有 build.log，build.bat 可能没跑起来）'
+            Write-Host "::error title=build::没有生成 build.log"
+          }
+
+      - name: 回显产物自检结果（失败也执行）
+        if: always()
         shell: pwsh
         run: |
           $log = 'dist/电力公司/selftest.log'
-          if (-not (Test-Path $log)) { throw '没有 selftest.log，自检可能没跑起来' }
+          if (-not (Test-Path $log)) {
+            Write-Host "::error title=selftest::没有 selftest.log，构建可能没走到打包那步"
+            exit 0
+          }
           Get-Content $log -Encoding UTF8
-          if (-not (Select-String -Path $log -Pattern '自检通过' -Quiet)) {
-            throw '产物自检没通过，不发布'
+          if (Select-String -Path $log -Pattern '自检通过' -Quiet) {
+            Write-Host "::notice title=selftest::产物自检通过"
+          } else {
+            $tail = ((Get-Content $log -Tail 12 -Encoding UTF8) -join '%0A')
+            Write-Host "::error title=selftest::产物自检没通过 —— $tail"
           }
 
       - name: 汇总
+        if: always()
         shell: pwsh
         run: |
-          $zip = Get-ChildItem 'release/*.zip' | Select-Object -First 1
+          if (-not (Test-Path 'release')) { exit 0 }
+          $zip = Get-ChildItem 'release/*.zip' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $zip) { exit 0 }
           $sha = Get-FileHash $zip.FullName -Algorithm SHA256
           $manifest = Get-Content 'dist/电力公司/MANIFEST.json' -Raw -Encoding UTF8 | ConvertFrom-Json
           @(
@@ -86,21 +123,24 @@ jobs:
             "| 源码 | $($manifest.gitRev)（dirty=$($manifest.gitDirty)） |",
             "| 文件数 | $($manifest.fileCount) |"
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          Write-Host "::notice title=artifact::$($zip.Name) $('{0:N2}' -f ($zip.Length/1MB))MB sha256=$($sha.Hash.ToLower())"
 
-      - name: 上传构建产物
+      - name: 上传构建产物（失败也执行）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: pwer-windows-x64
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
           path: |
             release/*.zip
             release/*.sha256
             dist/电力公司/MANIFEST.json
             dist/电力公司/selftest.log
+            build.log
 
       - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && success()
         uses: softprops/action-gh-release@v2
         with:
           name: "电力公司 ${{ github.ref_name }}"

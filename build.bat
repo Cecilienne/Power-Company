@@ -109,8 +109,10 @@ rem ---------- 6. 打包产物自检（门禁） ----------
 rem 这一步才是真正的验收：跑的是 dist 里那个 exe，不是源码。
 if /i "%MODE%"=="--onefile" (
     set "APPEXE=%CD%\dist\电力公司.exe"
+    set "APPDIR=%CD%\dist"
 ) else (
     set "APPEXE=%CD%\dist\电力公司\电力公司.exe"
+    set "APPDIR=%CD%\dist\电力公司"
 )
 rem 注意：批处理里直接调用 GUI 程序，cmd 会等它结束并带回 exit code；
 rem 用 start /wait 反而拿不到真实返回值，所以这里不要加 start。
@@ -119,8 +121,10 @@ if not exist "!APPEXE!" goto :fail
 "!APPEXE!" --selftest
 if errorlevel 1 (
     echo.
-    echo [失败] 打包产物自检没通过，不要发布这个东西。
-    echo        日志：同目录 selftest.log
+    echo [失败] 打包产物自检没通过，不要发布这个东西。下面是自检日志：
+    echo ----------------------------------------------
+    if exist "!APPDIR!\selftest.log" type "!APPDIR!\selftest.log"
+    echo ----------------------------------------------
     goto :fail
 )
 echo   产物自检通过
