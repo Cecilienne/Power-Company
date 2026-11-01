@@ -19,7 +19,7 @@ from .world import CITY_RADIUS, chebyshev
 
 
 def _own_tiles(game, co: Company):
-    return [t for row in game.world.tiles for t in row if t.owner == co.idx]
+    return list(game.world.owned_tiles(co.idx))
 
 
 def _has_sub_near(game, co: Company, city) -> bool:

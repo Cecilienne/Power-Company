@@ -37,23 +37,21 @@ def main() -> None:
     me.cash = 400_000
     for kind in ("substation", "coal"):
         app.set_build(kind)
+        # 480×480 上城市周围 7×7 未必有可建格，用环形搜索找最近的合规位置
+        hits = g.world.find_tiles(kind, limit=1, near=(city.x, city.y), radius=40)
         placed = False
-        for t in g.world.iter_tiles():
-            if abs(t.x - city.x) <= 3 and abs(t.y - city.y) <= 3:
-                ok = g.can_build(me, kind, t.x, t.y)[0]
-                if ok:
-                    app.on_tile_click(t.x, t.y)
-                    placed = bool(me.projects)
-                    break
-        check(f"在钢城附近建造 {kind}", placed)
+        if hits:
+            app.on_tile_click(*hits[0])
+            placed = bool(me.projects)
+        check(f"在钢城附近建造 {kind}", placed, f"候选 {hits}")
     app.refresh()
 
     # --- 2. 结束回合推进工程
     for _ in range(3):
         app.end_turn()
         app.update()
-    coal_tiles = [t for t in g.world.iter_tiles()
-                  if t.owner == me.idx and t.kind == "coal"]
+    coal_tiles = [i for i, k in enumerate(g.world.kind)
+                  if k == "coal" and g.world.own[i] == me.idx]
     check("燃煤电厂已投产", len(coal_tiles) >= 2, f"实际 {len(coal_tiles)}")
 
     # --- 3. 买股：公司账户买入 滨海控股 51%

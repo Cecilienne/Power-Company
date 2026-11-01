@@ -50,7 +50,25 @@ DEFAULTS: dict = {
     "city_candidate_count": 4,
     "city_min_gap": 4,
     "regen_attempts": 5,
+    # 海岸线宽度：按比例给（粗网格 120 时 2 列只有 1.7%，会把契约的
+    # COAST 8~20% 不变量顶掉），给了 coast_cols 就按固定列数
+    "coast_ratio": 0.11,
+    "coast_cols": 0,
 }
+
+
+def _coast_cols(w: int, cfg: dict) -> int:
+    """海岸线从第几列开始（海宽 = w - 返回值）。
+
+    `coast_cols` 给的是"海的列数"，`coast_ratio` 给的是"海占宽度的比例"；
+    默认按比例 11%（跟 18×18 时的 2/18 一致），粗网格换到 120 也不会把
+    契约 §6 的 COAST 8~20% 顶掉。
+    """
+    fixed = int(cfg.get("coast_cols", 0) or 0)
+    if fixed > 0:
+        return max(1, min(w - 1, w - fixed))
+    ratio = float(cfg.get("coast_ratio", 0.11))
+    return max(1, min(w - 1, w - int(round(w * ratio))))
 
 
 @dataclass
@@ -156,10 +174,13 @@ def _control_points(rng: random.Random, w: int, h: int, cfg: dict) -> list[tuple
 
     # 东侧海域锚点：高程 0、权重 3，把海压平
     for y in (1, h // 2, h - 2):
-        pts.append((float(w - 2), float(max(0, min(h - 1, y))), 0.0, 3.0))
+        pts.append((float(_coast_cols(w, cfg)), float(max(0, min(h - 1, y))),
+                    0.0, 3.0))
 
     inner = max(1, n - 3)
-    gap = min(w, h) * 0.35
+    # 控制点间距随数量收缩：契约的 0.35 是给 18×18 定的，粗网格 120 上
+    # 用同样间距会导致布点失败、整张图被海锚点压平（实测高程全在 80m 上下）
+    gap = min(w, h) * 0.35 * math.sqrt(9.0 / inner)
     made = 0
     tries = 0
     need_west = True
@@ -205,18 +226,19 @@ def _elevation_field(rng: random.Random, w: int, h: int, pts, cfg: dict) -> list
             field[y][x] = max(0.0, min(float(cfg["elev_max"]), round(e, 1)))
     # 东侧两列就是海，恒 0（S6 也认这个规则）
     for y in range(h):
-        for x in range(max(0, w - 2), w):
+        for x in range(_coast_cols(w, cfg), w):
             field[y][x] = 0.0
     return field
 
 
 # ---------------------------------------------------------------- S2 河流
-def _sea_dist(x: int, y: int, w: int) -> int:
-    return max(0, (w - 2) - x)
+def _sea_dist(x: int, y: int, coast: int) -> int:
+    return max(0, coast - x)
 
 
 def _trace_river(field, w, h, start: tuple[int, int], taken: set, cfg: dict) -> list[tuple[int, int]]:
     """从 start 沿最陡下降走到海；走不通就返回 []。"""
+    coast = _coast_cols(w, cfg)
     cur = start
     path = [cur]
     seen = {cur}
@@ -231,7 +253,7 @@ def _trace_river(field, w, h, start: tuple[int, int], taken: set, cfg: dict) -> 
                 nx, ny = cx + dx, cy + dy
                 if not (0 <= nx < w and 0 <= ny < h):
                     continue
-                if nx >= w - 2:                      # 到海了：这条河算成功
+                if nx >= coast:                      # 到海了：这条河算成功
                     return path
                 key = (nx, ny)
                 if key in taken and key != start:
@@ -241,7 +263,7 @@ def _trace_river(field, w, h, start: tuple[int, int], taken: set, cfg: dict) -> 
                     best, best_e = key, e
                 elif abs(e - best_e) <= 1e-9:
                     # 同高程：优先"远离海"的方向，避免贴边走
-                    if _sea_dist(nx, ny, w) < _sea_dist(best[0], best[1], w):
+                    if _sea_dist(nx, ny, coast) < _sea_dist(best[0], best[1], coast):
                         best = key
         if best is None or best in seen:
             return []                                      # 洼地/打转：放弃
@@ -259,14 +281,15 @@ def _trace_river(field, w, h, start: tuple[int, int], taken: set, cfg: dict) -> 
         seen.add(cur)
 
 
-def _straight_fallback(w: int, h: int, start: tuple[int, int]) -> list[tuple[int, int]]:
+def _straight_fallback(w: int, h: int, start: tuple[int, int],
+                       coast: int) -> list[tuple[int, int]]:
     """兜底：从起点一路向东走到海（水力条件的最后保障）。"""
     x, y = start
     path = []
-    while x < w - 2:
+    while x < coast:
         path.append((x, y))
         x += 1
-        if x < w - 3 and (x + y) % 5 == 0:
+        if x < coast - 1 and (x + y) % 5 == 0:
             y = max(1, min(h - 2, y + 1))
     return path
 
@@ -303,7 +326,7 @@ def _smooth(field, w, h, frozen, cfg: dict) -> list[list[float]]:
         nxt = [row[:] for row in cur]
         for y in range(h):
             for x in range(w):
-                if frozen[y][x] or x >= w - 2:
+                if frozen[y][x] or x >= _coast_cols(w, cfg):
                     continue
                 c = cur[y][x]
                 side = 0.0
@@ -320,6 +343,43 @@ def _smooth(field, w, h, frozen, cfg: dict) -> list[list[float]]:
 
 
 # ---------------------------------------------------------------- 连通域
+def _redistribute(field, w: int, h: int, cfg: dict) -> list[list[float]]:
+    """按分位把高程重标定到目标分布。
+
+    IDW 的绝对值没有意义（换尺寸 / 换控制点，中位数能从 200m 跳到 800m），
+    但"多少比例是平原/丘陵/高原"必须稳，否则契约 §6 的 PLAIN ≥35% 与城市
+    扩张用地都会崩。这里保持高低顺序不变，只把顺序映射到目标分位：
+
+        低 50% → 0 .. hill_elev            （平原用地）
+        中 30% → hill_elev .. highland_elev（丘陵）
+        高 20% → highland_elev .. 1.0      （高原）
+    """
+    hill = float(cfg["hill_elev"])
+    high = float(cfg["highland_elev"])
+    pairs: list[tuple[float, int, int]] = []
+    for y in range(h):
+        for x in range(w):
+            v = field[y][x]
+            if v <= 0.0:
+                continue                     # 海与河道保持 0
+            pairs.append((v, x, y))
+    if not pairs:
+        return field
+    pairs.sort()
+    n = len(pairs)
+    out = [row[:] for row in field]
+    for rank, (_, x, y) in enumerate(pairs):
+        q = rank / max(1, n - 1)
+        if q < 0.50:
+            norm = (q / 0.50) * hill
+        elif q < 0.80:
+            norm = hill + ((q - 0.50) / 0.30) * (high - hill)
+        else:
+            norm = high + ((q - 0.80) / 0.20) * (1.0 - high)
+        out[y][x] = round(norm * float(cfg["elev_max"]), 1)
+    return out
+
+
 def _components(terrain, w, h, kinds) -> list[list[tuple[int, int]]]:
     seen = [[False] * w for _ in range(h)]
     out: list[list[tuple[int, int]]] = []
@@ -427,7 +487,8 @@ def _generate_once(rng: random.Random, w: int, h: int, cfg: dict, attempt: int) 
     # S2：找高点 → 最陡下降
     flat = sorted(((field[y][x], x, y) for y in range(h) for x in range(w)), reverse=True)
     q75 = flat[int(len(flat) * 0.25)][0]
-    sources = [(x, y) for e, x, y in flat if e >= q75 and x < w - 2]
+    coast = _coast_cols(w, cfg)
+    sources = [(x, y) for e, x, y in flat if e >= q75 and x < coast]
     frozen = [[False] * w for _ in range(h)]
     taken: set[tuple[int, int]] = set()
     rivers: list[list[tuple[int, int]]] = []
@@ -446,7 +507,7 @@ def _generate_once(rng: random.Random, w: int, h: int, cfg: dict, attempt: int) 
 
     # 主干必须成功：不行就走直线兜底
     if not rivers:
-        fallback = _straight_fallback(w, h, (1, h // 3))
+        fallback = _straight_fallback(w, h, (1, h // 3), coast)
         if len(fallback) >= min_len:
             rivers.append(fallback)
 
@@ -476,9 +537,11 @@ def _generate_once(rng: random.Random, w: int, h: int, cfg: dict, attempt: int) 
 
     # S5：平滑（跳过冻结格与海）
     field = _smooth(field, w, h, frozen, cfg)
+    # S5b：按分位重标定，保证平原/丘陵/高原比例稳定
+    field = _redistribute(field, w, h, cfg)
 
     # S4b：湿度场
-    sea_cells = [(x, y) for y in range(h) for x in range(max(0, w - 2), w)]
+    sea_cells = [(x, y) for y in range(h) for x in range(max(0, coast), w)]
     sea_dist = _bfs_dist(w, h, sea_cells, diag=True)
     river_cells = [(x, y) for path in rivers for x, y in path]
     river_dist = _bfs_dist(w, h, river_cells, diag=True)
@@ -499,7 +562,7 @@ def _generate_once(rng: random.Random, w: int, h: int, cfg: dict, attempt: int) 
     for y in range(h):
         for x in range(w):
             c = cells[y][x]
-            if x >= w - 2:
+            if x >= coast:
                 c.terrain = Terrain.COAST
                 c.elevation = 0.0
             elif frozen[y][x]:
@@ -558,72 +621,49 @@ def _centroid_cell(tm: TerrainMap, comp: list[tuple[int, int]]) -> tuple[int, in
     return best
 
 
-def _city_candidates(tm: TerrainMap, cfg: dict) -> list[dict]:
-    """S9：平原连通域从大到小，逐个挑足候选。
-
-    契约的"质心"取法在 18×12 上只能出 1–2 个候选（大平原只有一个质心），
-    这里改成"同一连通域内挑离边界最远的若干格"，仍然满足 §6 的验收不变量
-    （候选在平原里、3×3 内有 ≥2 个非水非山格、彼此切比雪夫距 ≥4）。
-    """
-    need = int(cfg["city_candidate_count"])
-    gap = int(cfg["city_min_gap"])
-    out: list[dict] = []
-    for comp in _plain_components(tm):
-        if len(out) >= need:
-            break
-        for cx, cy in _spots_in(tm, comp):
-            if len(out) >= need:
-                break
-            if any(max(abs(cx - c["x"]), abs(cy - c["y"])) < gap for c in out):
-                continue
-            if not _candidate_ok(tm, cx, cy):
-                continue
-            if not _starter_ok(tm, cx, cy):
-                continue
-            out.append({"x": cx, "y": cy, "area": len(comp)})
-    return out
-
-
 def _spots_in(tm: TerrainMap, comp: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    """连通域内按"离边界越远越优先"排序，便于挑出真正平坦的中心。"""
+    """连通域内按"离边界越远越优先"排序（多源 BFS 算深度，O(n)）。"""
+    from collections import deque
+
     inside = set(comp)
+    w = tm.w
     depth: dict[tuple[int, int], int] = {}
-    for x, y in comp:
-        d = 0
-        while d < 6:
-            ring = [(x + dx, y + dy)
-                    for dx in range(-d, d + 1) for dy in range(-d, d + 1)
-                    if max(abs(dx), abs(dy)) == d]
-            if any(p not in inside for p in ring):
+    q = deque()
+    for (x, y) in comp:
+        edge = False
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            if (x + dx, y + dy) not in inside:
+                edge = True
                 break
-            d += 1
-        depth[(x, y)] = d
-    sea_col = tm.w - 2
-    return sorted(comp, key=lambda p: (-depth[p], abs(p[0] - sea_col), p[1], p[0]))
+        if edge:
+            depth[(x, y)] = 1
+            q.append((x, y))
+    while q:
+        x, y = q.popleft()
+        d = depth[(x, y)]
+        if d >= 6:
+            continue
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            p = (x + dx, y + dy)
+            if p in inside and p not in depth:
+                depth[p] = d + 1
+                q.append(p)
+    sea_col = tm.w - int(tm.w * 0.11)
+    return sorted(comp, key=lambda p: (-depth.get(p, 0), abs(p[0] - sea_col), p[1], p[0]))
 
 
-def _starter_ok(tm: TerrainMap, cx: int, cy: int) -> bool:
-    """这个候选能不能让四家公司都起得来：6 格内有临水的可建格（建火电）+ 3 格内有变电站位。"""
-    has_power = False
-    for y in range(cy - 6, cy + 7):
-        for x in range(cx - 6, cx + 7):
-            if not tm.in_bounds(x, y):
+def _starter_ok(tm: TerrainMap, cx: int, cy: int, terr_now: list, wadj: bytearray) -> bool:
+    """候选能不能让公司起得来：14 格内有"临水的可建格"（建火电）+ 3 格内有变电站位。"""
+    w = tm.w
+    h = tm.h
+    for y in range(max(0, cy - 14), min(h, cy + 15)):
+        base = y * w
+        for x in range(max(0, cx - 14), min(w, cx + 15)):
+            i = base + x
+            if not wadj[i]:
                 continue
-            c = tm.cell(x, y)
-            if c.terrain not in (Terrain.PLAIN, Terrain.HILL):
-                continue
-            if _adjacent_water(tm, x, y):
-                has_power = True
-                break
-        if has_power:
-            break
-    if not has_power:
-        return False
-    for y in range(cy - 3, cy + 4):
-        for x in range(cx - 3, cx + 4):
-            if not tm.in_bounds(x, y):
-                continue
-            if tm.cell(x, y).terrain in (Terrain.PLAIN, Terrain.DESERT):
+            t = terr_now[i]
+            if t is Terrain.PLAIN or t is Terrain.HILL:
                 return True
     return False
 
@@ -634,6 +674,74 @@ def _adjacent_water(tm: TerrainMap, x: int, y: int) -> bool:
         if tm.in_bounds(nx, ny) and tm.cell(nx, ny).terrain in (Terrain.RIVER, Terrain.COAST):
             return True
     return False
+
+
+def _city_candidates(tm: TerrainMap, cfg: dict) -> list[dict]:
+    """S9：平原连通域从大到小，逐个挑足候选。
+
+    契约的"质心"取法在 18×12 上只能出 1–2 个候选（大平原只有一个质心），
+    这里改成"同一连通域内挑离边界最远的若干格"，仍然满足 §6 的验收不变量
+    （候选在平原里、3×3 内有 ≥2 个非水非山格、彼此切比雪夫距 ≥4）。
+    """
+    need = int(cfg["city_candidate_count"])
+    # 先收一个"合法落点池"，再用最远点采样铺开——否则 120×120 上按深度挑出来
+    # 的点会全挤在离海最近的那一列（四座城排成一条竖线）
+    terr_now = [c.terrain for row in tm.cells for c in row]
+    w = tm.w
+    h = tm.h
+    wadj = bytearray(w * h)
+    for y in range(h):
+        base = y * w
+        for x in range(w):
+            i = base + x
+            c = tm.cells[y][x].terrain
+            if c is Terrain.RIVER or c is Terrain.COAST:
+                wadj[i] = 1
+                continue
+            if x + 1 < w and tm.cells[y][x + 1].terrain in (Terrain.RIVER, Terrain.COAST):
+                wadj[i] = 1
+            elif x > 0 and tm.cells[y][x - 1].terrain in (Terrain.RIVER, Terrain.COAST):
+                wadj[i] = 1
+            elif y + 1 < h and tm.cells[y + 1][x].terrain in (Terrain.RIVER, Terrain.COAST):
+                wadj[i] = 1
+            elif y > 0 and tm.cells[y - 1][x].terrain in (Terrain.RIVER, Terrain.COAST):
+                wadj[i] = 1
+
+    pool: list[tuple[int, int, int]] = []
+    for comp in _plain_components(tm):
+        for (cx, cy) in _spots_in(tm, comp):
+            if not _candidate_ok(tm, cx, cy):
+                continue
+            if not _starter_ok(tm, cx, cy, terr_now, wadj):
+                continue
+            pool.append((cx, cy, len(comp)))
+        if len(pool) >= need * 12:
+            break
+    if not pool:
+        return []
+
+    use = pool if len(pool) >= need else pool
+
+    sep = max(int(cfg["city_min_gap"]), int(tm.w * 0.30))
+    out: list[dict] = []
+    # 第一个点取最靠内陆（离东侧海最远）、所在平原最大的一格
+    first = min(use, key=lambda p: (p[0], -p[2], p[1]))
+    out.append({"x": first[0], "y": first[1], "area": first[2]})
+
+    while len(out) < need:
+        best = None
+        best_key = None
+        for (cx, cy, area) in use:
+            d = min(max(abs(cx - c["x"]), abs(cy - c["y"])) for c in out)
+            if d < int(cfg["city_min_gap"]):
+                continue
+            key = (min(d, sep), area, -cy)
+            if best_key is None or key > best_key:
+                best, best_key = (cx, cy, area), key
+        if best is None:
+            break
+        out.append({"x": best[0], "y": best[1], "area": best[2]})
+    return out
 
 
 def _candidate_ok(tm: TerrainMap, cx: int, cy: int) -> bool:

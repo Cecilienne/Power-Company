@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import math
 import tkinter as tk
 from tkinter import ttk
 from typing import Callable, Optional
@@ -19,13 +20,16 @@ from ..constants import (
     UI_BG,
     UI_DIM,
 )
-from ..world import CITY_RADIUS, GRID_H, GRID_W, Terrain
+from ..world import (CITY_RADIUS, CITY_TERRAIN_IDX, GRID_H, GRID_W,
+                     TERRAIN_ORDER, Terrain)
 
-TS = 60          # 每格像素：18×18 格 = 1080×1080 像素
-BASE_TS = 60     # 100% 缩放时的格子边长（18×60 = 1080）
+TS = 6           # 当前每格像素（随缩放变化，见 _set_ts）
+BASE_TS = 60     # 100% 缩放时的格子边长
+_LINE_JOIN_KINDS = {"line", "substation", "coal", "gas", "hydro", "wind",
+                    "solar", "nuclear"}
 
 
-ZOOM_MIN = 0.5
+ZOOM_MIN = 0.02     # 960×960 时整图要缩到 ~2%
 ZOOM_MAX = 2.0
 ZOOM_STEP = 1.15
 
@@ -53,6 +57,9 @@ class MapView(ttk.Frame):
         self.zoom = 1.0                 # 相对基准格子边长的倍率
         self.manual = False             # 玩家自己缩放过 → 窗口变化不再自动 fit
         self._pan_from: Optional[tuple[int, int]] = None
+        self._redraw_job: Optional[str] = None
+        self._shades: Optional[list[tuple[str, str, str]]] = None
+        self._shade_key: tuple = ()
 
         self._busy = False
         self.canvas = tk.Canvas(self, bg=UI_BG, highlightthickness=0, bd=0)
@@ -93,13 +100,21 @@ class MapView(ttk.Frame):
     def set_tile(self, ts: int) -> None:
         """直接指定格子边长（App 启动时用），会重画并保持当前视点。"""
         if self.game is not None:
-            self._keep_centre(lambda: self._set_ts(max(8, int(ts))))
+            self._keep_centre(lambda: self._set_ts(max(1, int(ts))))
         else:
-            self._set_ts(max(8, int(ts)))
+            self._set_ts(max(1, int(ts)))
+
+    def _notify_zoom(self) -> None:
+        if self.on_zoom is None:
+            return
+        try:
+            self.on_zoom(self.zoom)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _set_ts(self, ts: int) -> None:
         global TS
-        TS = max(8, int(ts))
+        TS = max(1, int(ts))
         if self.game is not None:
             self.draw(self.game)
         self._sync_scrollregion()
@@ -158,25 +173,60 @@ class MapView(ttk.Frame):
         if self.on_zoom is not None:
             self.on_zoom(self.zoom)
 
+    def focus_on(self, tx: int, ty: int, zoom: float = 0.5) -> None:
+        """把镜头对准某一格（开局用：直接看自己的电厂，而不是 2% 的全图）。"""
+        if self.game is None:
+            return
+        zoom = max(ZOOM_MIN, min(ZOOM_MAX, zoom))
+        self._busy = True
+        try:
+            self._set_ts(max(1, int(round(BASE_TS * zoom))))
+        finally:
+            self._busy = False
+        self.zoom = TS / BASE_TS
+        self._notify_zoom()
+        self._layout()
+        c = self.canvas
+        vw, vh = max(1, c.winfo_width()), max(1, c.winfo_height())
+        self._view_to(tx * TS - vw / 2, ty * TS - vh / 2)
+        self.manual = True
+
     def fit(self) -> None:
         """缩放到刚好装下整张棋盘并居中；装得下就是 100%，不放大。"""
         if self.game is None:
             return
         vw = max(1, self.winfo_width())
         vh = max(1, self.winfo_height())
-        board = GRID_W * BASE_TS
+        w = self.game.world
+        board = max(w.w, w.h) * BASE_TS
         zoom = min(1.0, vw / board, vh / board)
-        ts = max(8, int(round(BASE_TS * zoom)))
+        ts = max(1, int(round(BASE_TS * zoom)))
         self._busy = True
         try:
             self._set_ts(ts)
         finally:
             self._busy = False
         self.zoom = ts / BASE_TS
+        self._notify_zoom()
         self.manual = False
         self._centre()
+        self._redraw_now()
         if self.on_zoom is not None:
             self.on_zoom(self.zoom)
+
+    def _redraw_soon(self) -> None:
+        """视点变了就补画一次（合并到下一帧，别每次鼠标移动都重画）。"""
+        if self._redraw_job is not None or self.game is None:
+            return
+        try:
+            self._redraw_job = self.after(30, self._redraw_now)
+        except Exception:  # noqa: BLE001
+            self._redraw_job = None
+
+    def _redraw_now(self) -> None:
+        self._redraw_job = None
+        if self.game is not None and not self._busy:
+            self.draw(self.game)
 
     def _keep_anchor(self, ts: int, ex: Optional[int], ey: Optional[int]) -> None:
         """缩放时让光标下的那个点留在原地。"""
@@ -207,6 +257,7 @@ class MapView(ttk.Frame):
         y0 = max(0.0, min(max(0.0, bh - vh), y0))
         c.xview_moveto(x0 / max(1, bw))
         c.yview_moveto(y0 / max(1, bh))
+        self._redraw_soon()
 
     def _view_centre(self, cx: float, cy: float) -> None:
         c = self.canvas
@@ -247,63 +298,142 @@ class MapView(ttk.Frame):
             pass
 
     # ------------------------------------------------------------ 绘制
+    def _visible_tiles(self, pad: float = 0.35) -> tuple[int, int, int, int]:
+        """取景框里可见的格子范围（含边界，已裁到地图内）。
+
+        `pad` 是四周多画一圈的比例：拖动时先把下一屏也画好，滚出去不至于空白。
+        """
+        c = self.canvas
+        ts = max(1, TS)
+        x0, y0 = c.canvasx(0), c.canvasy(0)
+        vw = max(1, c.winfo_width())
+        vh = max(1, c.winfo_height())
+        mx, my = vw * pad, vh * pad
+        return (max(0, int((x0 - mx) // ts)), max(0, int((y0 - my) // ts)),
+                int((x0 + vw + mx) // ts), int((y0 + vh + my) // ts))
+
+    def _shade_table(self) -> list[tuple[str, str, str]]:
+        """每种地形按高程分三档，给底图上一点起伏感（同色块太板）。"""
+        key = tuple(TERRAIN_ORDER)
+        if getattr(self, "_shades", None) is not None and self._shade_key == key:
+            return self._shades
+        table = []
+        for t in TERRAIN_ORDER:
+            base = TERRAIN_INFO[t].color
+            table.append(tuple(_shade(base, f) for f in (0.90, 1.0, 1.10)))
+        self._shades = table
+        self._shade_key = key
+        return table
+
+    def _lod_block(self) -> int:
+        """格子太小时把 block×block 归成一个色块。
+
+        960×960 缩到整图时一格不到 2 像素，逐格画要 92 万个矩形；
+        按"一格至少 ~14 像素"聚合，可见矩形数稳定在几千个以内。
+        """
+        ts = max(1, TS)
+        if ts >= 14:
+            return 1
+        return max(2, int(math.ceil(14.0 / ts)))
+
     def draw(self, game) -> None:
         self.game = game
         c = self.canvas
         c.delete("all")
         w = game.world
-        ts = TS
-        for row in w.tiles:
-            for t in row:
-                x0, y0 = t.x * ts, t.y * ts
-                info = TERRAIN_INFO[t.terrain]
-                fill = info.color if t.terrain is not Terrain.CITY else "#8f7f6d"
-                c.create_rectangle(x0, y0, x0 + ts, y0 + ts, fill=fill,
-                                   outline="#2b2f36", width=1)
-                if t.coal > 0 and not t.occupied:
-                    r = ts * 0.09
-                    c.create_oval(x0 + ts * 0.18 - r, y0 + ts * 0.82 - r,
-                                  x0 + ts * 0.18 + r, y0 + ts * 0.82 + r,
-                                  fill="#1e1e1e", outline="#000")
-                if t.uranium > 0 and not t.occupied:
-                    r = ts * 0.09
-                    c.create_oval(x0 + ts * 0.82 - r, y0 + ts * 0.82 - r,
-                                  x0 + ts * 0.82 + r, y0 + ts * 0.82 + r,
-                                  fill="#3fae5a", outline="#000")
-        # 建造模式：只压暗地面（不可建的地块），建筑与城市仍保持清晰
-        if self.build_mode:
-            for row in w.tiles:
-                for t in row:
-                    if (t.x, t.y) in self.valid_tiles:
-                        continue
-                    c.create_rectangle(t.x * ts + 1, t.y * ts + 1,
-                                       t.x * ts + ts - 1, t.y * ts + ts - 1,
-                                       fill="#0c0e12", outline="", stipple="gray50")
-        # 输电线路：先画在地块之上、建筑之下
-        for row in w.tiles:
-            for t in row:
-                if t.kind != "line" or t.owner < 0:
+        ts = max(1, TS)
+        W, H = w.w, w.h
+        xa, ya, xb, yb = self._visible_tiles()
+        xb, yb = min(xb, W - 1), min(yb, H - 1)
+        if xb < xa or yb < ya:
+            self._sync_scrollregion()
+            return
+        block = self._lod_block()
+
+        # 1) 地形底图（LOD 聚合）
+        shades = self._shade_table()
+        terr = w.terr
+        elev = w.elev
+        outline = "#2b2f36" if (block == 1 and ts >= 14) else ""
+        span = ts * block
+        half = block // 2
+        for by in range(ya, yb + 1, block):
+            sy = min(H - 1, by + half)
+            for bx in range(xa, xb + 1, block):
+                sx = min(W - 1, bx + half)
+                ti = terr[sy * W + sx]
+                if ti == CITY_TERRAIN_IDX:
+                    fill = "#8f7f6d"
+                else:
+                    fill = shades[ti][_elev_bucket(elev[sy * W + sx])]
+                x0 = bx * ts
+                y0 = by * ts
+                c.create_rectangle(x0, y0, x0 + span, y0 + span,
+                                   fill=fill, outline=outline, width=1)
+
+        # 2) 线路（在所有地块之上、建筑之下）
+        for owner, x, y in w.all_owned():
+            if w.kind[y * W + x] != "line":
+                continue
+            cx, cy = x * ts + ts / 2, y * ts + ts / 2
+            col = COMPANY_COLORS[owner % len(COMPANY_COLORS)]
+            for nx, ny in w.neighbors4(x, y):
+                n = ny * W + nx
+                if w.own[n] != owner:
                     continue
-                x0, y0 = t.x * ts, t.y * ts
-                cx, cy = x0 + ts / 2, y0 + ts / 2
-                col = COMPANY_COLORS[t.owner % len(COMPANY_COLORS)]
-                for nx, ny in w.neighbors4(t.x, t.y):
-                    n = w.tile(nx, ny)
-                    if n.owner == t.owner and n.kind in (
-                            "line", "substation", "coal", "gas", "hydro", "wind",
-                            "solar", "nuclear"):
-                        c.create_line(cx, cy, nx * ts + ts / 2, ny * ts + ts / 2,
-                                      fill=col, width=max(2, int(ts * 0.07)))
-                r = max(2, ts * 0.06)
-                c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=col, outline="")
-        # 城市供电服务圈（变电站必须落在这个圈里）
+                if w.kind[n] not in _LINE_JOIN_KINDS:
+                    continue
+                c.create_line(cx, cy, nx * ts + ts / 2, ny * ts + ts / 2,
+                              fill=col, width=max(2, int(ts * 0.07)))
+            r = max(1, ts * 0.06)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=col, outline="")
+
+        # 3) 城市：缩到全图时也要能看见，所以先画一个标记点
         for city in w.cities:
+            cx, cy = city.x * ts + ts / 2, city.y * ts + ts / 2
+            r = max(4.0, ts * 0.55)
+            c.create_rectangle(cx - r, cy - r, cx + r, cy + r,
+                               fill="#f4f2ec", outline="#8f7f6d", width=1)
+        # 3b) 城市服务圈（变电站必须落在这个圈里）
+        for city in w.cities:
+            if not (xa - CITY_RADIUS - 1 <= city.x <= xb + CITY_RADIUS + 1
+                    and ya - CITY_RADIUS - 1 <= city.y <= yb + CITY_RADIUS + 1):
+                continue
             c.create_rectangle((city.x - CITY_RADIUS) * ts + 2, (city.y - CITY_RADIUS) * ts + 2,
-                               (city.x + CITY_RADIUS + 1) * ts - 2, (city.y + CITY_RADIUS + 1) * ts - 2,
+                               (city.x + CITY_RADIUS + 1) * ts - 2,
+                               (city.y + CITY_RADIUS + 1) * ts - 2,
                                outline="#ffd479", width=1, dash=(4, 3))
-        for row in w.tiles:
-            for t in row:
-                self._draw_occupant(game, t)
+
+        # 4) 建筑 / 资源点：只画可见范围里有内容的格子
+        coal, uranium, kind = w.coal, w.uranium, w.kind
+        for y in range(ya, yb + 1):
+            base = y * W
+            for x in range(xa, xb + 1):
+                i = base + x
+                if kind[i]:
+                    self._draw_occupant(game, w.tile(x, y))
+                elif coal[i] > 0 or uranium[i] > 0:
+                    x0, y0 = x * ts, y * ts
+                    r = max(1.5, ts * 0.09)
+                    if coal[i] > 0:
+                        c.create_oval(x0 + ts * 0.18 - r, y0 + ts * 0.82 - r,
+                                      x0 + ts * 0.18 + r, y0 + ts * 0.82 + r,
+                                      fill="#1e1e1e", outline="#000")
+                    if uranium[i] > 0:
+                        c.create_oval(x0 + ts * 0.82 - r, y0 + ts * 0.82 - r,
+                                      x0 + ts * 0.82 + r, y0 + ts * 0.82 + r,
+                                      fill="#3fae5a", outline="#000")
+
+        # 5) 建造模式：可见范围内把不可建的格子压暗
+        if self.build_mode and self.valid_tiles:
+            for y in range(ya, yb + 1):
+                for x in range(xa, xb + 1):
+                    if (x, y) in self.valid_tiles:
+                        continue
+                    c.create_rectangle(x * ts + 1, y * ts + 1,
+                                       x * ts + ts - 1, y * ts + ts - 1,
+                                       fill="#0c0e12", outline="", stipple="gray50")
+
         if self.selected:
             x, y = self.selected
             c.create_rectangle(x * ts, y * ts, x * ts + ts, y * ts + ts,
@@ -318,6 +448,19 @@ class MapView(ttk.Frame):
         ts = TS
         x0, y0 = t.x * ts, t.y * ts
         cx, cy = x0 + ts / 2, y0 + ts / 2
+        if ts < 9:
+            # 缩到全图时格子只有几像素，图标文字只会糊成一片：只留一个色点
+            if t.kind == "city":
+                col = "#f4f2ec"
+            elif t.kind == "line":
+                col = COMPANY_COLORS[(t.owner or 0) % len(COMPANY_COLORS)]
+            elif t.owner is not None and t.owner >= 0:
+                col = COMPANY_COLORS[t.owner % len(COMPANY_COLORS)]
+            else:
+                col = "#d8d2c4"
+            r = max(1.2, ts * 0.35)
+            c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=col, outline="")
+            return
         if t.kind == "city":
             city = game.world.city_at(t.x, t.y)
             bw = ts * 0.26
@@ -327,9 +470,10 @@ class MapView(ttk.Frame):
                                fill="#c9c2b2", outline="#5a5246")
             c.create_rectangle(cx + bw * 0.9, cy - bw * 0.6, cx + bw * 1.9, cy + bw * 1.1,
                                fill="#d8d2c4", outline="#5a5246")
-            if city:
+            if city and ts >= 10:
                 c.create_text(cx, y0 + ts * 0.80, text=f"{city.name} {city.demand_mw:.0f}MW",
-                              fill="#ffffff", font=("Microsoft YaHei UI", -int(ts * 0.19), "bold"))
+                              fill="#ffffff",
+                              font=("Microsoft YaHei UI", -max(7, int(ts * 0.19)), "bold"))
                 # 市场份额条：谁在给这座城市供电
                 bx = x0 + ts * 0.08
                 bw = ts * 0.84
@@ -402,6 +546,24 @@ class MapView(ttk.Frame):
             if pr:
                 c.create_text(cx, y0 + ts * 0.30, text=f"建{pr.turns_left}", fill="#ffd479",
                               font=("Microsoft YaHei UI", -int(ts * 0.20), "bold"))
+
+
+def _elev_bucket(e: float) -> int:
+    """高程 0~1200 分三档（低/中/高），给底图配三档色。"""
+    n = e / 1200.0
+    return 0 if n < 0.34 else (1 if n < 0.68 else 2)
+
+
+def _shade(color: str, factor: float) -> str:
+    """把 #rrggbb 乘个系数：>1 提亮、<1 压深（夹在 0..255）。"""
+    r = int(color[1:3], 16)
+    g = int(color[3:5], 16)
+    b = int(color[5:7], 16)
+
+    def f(v: int) -> int:
+        return max(0, min(255, int(round(v * factor))))
+
+    return f"#{f(r):02x}{f(g):02x}{f(b):02x}"
 
 
 def tile_tooltip(game, x: int, y: int) -> str:

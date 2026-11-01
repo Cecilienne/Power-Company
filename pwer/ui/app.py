@@ -688,6 +688,22 @@ class App(tk.Tk):
             return
         self._map_fit_job = self.after(80, self._fit_map)
 
+    def _map_focus_spot(self) -> tuple[int, int] | None:
+        """开局镜头落点：玩家自己的第一座电厂 → 自己的变电站 → 第一座城。"""
+        try:
+            me = self.game.player
+            for p in me.plants:
+                return (p.x, p.y)
+            for t in self.game.world.owned_tiles(me.idx):
+                if t.kind in ("substation", "line"):
+                    return (t.x, t.y)
+        except Exception:  # noqa: BLE001
+            pass
+        if self.game.world.cities:
+            c = self.game.world.cities[0]
+            return (c.x, c.y)
+        return None
+
     def _fit_map(self) -> None:
         self._map_fit_job = None
         if not hasattr(self, "map"):
@@ -696,6 +712,11 @@ class App(tk.Tk):
             return
         # 玩家自己缩放过就不抢镜头，只有「适应」或刚开局才重新贴合窗口。
         if self.map.manual:
+            return
+        # 960×960 全图缩到 2% 什么都看不见，开局直接看玩家自己的电厂
+        spot = self._map_focus_spot()
+        if spot is not None:
+            self.map.focus_on(spot[0], spot[1], 0.5)
             return
         self.map.fit()
 
@@ -1141,8 +1162,15 @@ class App(tk.Tk):
     def set_build(self, kind: str) -> None:
         self.build_mode = kind
         me = self.game.player
-        valid = {(t.x, t.y) for t in self.game.world.iter_tiles()
-                 if self.game.can_build(me, kind, t.x, t.y)[0]}
+        # 960×960 全图逐格检查要 1~2 秒，只算视野附近（外扩 40 格）——
+        # 玩家看到的范围里"能建/不能建"都对，拖到别处再进一次建造模式即可
+        w = self.game.world
+        xa, ya, xb, yb = self.map._visible_tiles()
+        pad = 40
+        valid = {(x, y)
+                 for y in range(max(0, ya - pad), min(w.h - 1, yb + pad) + 1)
+                 for x in range(max(0, xa - pad), min(w.w - 1, xb + pad) + 1)
+                 if self.game.can_build(me, kind, x, y)[0]}
         self.map.build_mode = kind
         self.map.valid_tiles = valid
         self.map.draw(self.game)
@@ -1544,8 +1572,7 @@ class App(tk.Tk):
             cost = self._kind_cost(kind)
             name = (PLANT_SPECS[kind].name if kind in PLANT_SPECS
                     else INFRA_SPECS[kind].name)
-            tiles = sum(1 for t in self.game.world.iter_tiles()
-                        if self.game.world.check_build(kind, t.x, t.y)[0])
+            tiles = self.game.world.count_buildable(kind)[0]
             approved = (kind != "nuclear") or self.game.policy.nuclear_approved
             can_pay = me.cash >= cost * 1.05
             ok = tiles > 0 and can_pay and approved

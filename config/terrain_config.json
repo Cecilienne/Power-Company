@@ -3,8 +3,8 @@
   "width": 18,
   "height": 18,
   "control_points": [
-    6,
-    9
+    24,
+    36
   ],
   "idw_power": 2.0,
   "idw_neighbors": 8,

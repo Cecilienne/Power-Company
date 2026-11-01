@@ -23,10 +23,10 @@ def is_grid_node(t: Tile) -> bool:
 
 
 def grid_tiles(world: WorldMap, owner: int) -> Iterable[Tile]:
-    for row in world.tiles:
-        for t in row:
-            if t.owner == owner and is_grid_node(t):
-                yield t
+    """自有电网地块（走占用索引，960×960 也不用扫全图）。"""
+    for t in world.owned_tiles(owner):
+        if is_grid_node(t):
+            yield t
 
 
 def components(world: WorldMap, owner: int) -> list[set[tuple[int, int]]]:
@@ -63,18 +63,15 @@ def _plant_cap_in(world: WorldMap, owner: int, comp: set[tuple[int, int]]) -> fl
 
 def _gateway_in(world: WorldMap, owner: int, city: City) -> float:
     gw = 0.0
-    for row in world.tiles:
-        for t in row:
-            if t.owner != owner:
-                continue
-            if chebyshev(t.x, t.y, city.x, city.y) > CITY_RADIUS:
-                continue
-            if t.kind == "substation":
-                gw += 180.0
-            elif t.kind == "line":
-                gw += 120.0
-            elif t.kind in PLANT_SPECS:
-                gw += 60.0   # 电厂直接接入城市，容量贡献较小
+    for t in world.owned_tiles(owner):
+        if chebyshev(t.x, t.y, city.x, city.y) > CITY_RADIUS:
+            continue
+        if t.kind == "substation":
+            gw += 180.0
+        elif t.kind == "line":
+            gw += 120.0
+        elif t.kind in PLANT_SPECS:
+            gw += 60.0   # 电厂直接接入城市，容量贡献较小
     return gw
 
 
@@ -87,9 +84,8 @@ def city_supply(world: WorldMap, owner: int, city: City,
         return 0.0, 0.0
     # 城市半径内有变电站才算接入
     has_sub = any(
-        world.tile(t.x, t.y).owner == owner and t.kind == "substation"
-        and chebyshev(t.x, t.y, city.x, city.y) <= CITY_RADIUS
-        for t in world.iter_tiles()
+        t.kind == "substation" and chebyshev(t.x, t.y, city.x, city.y) <= CITY_RADIUS
+        for t in world.owned_tiles(owner)
     )
     if not has_sub:
         return 0.0, 0.0

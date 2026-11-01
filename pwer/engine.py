@@ -53,16 +53,9 @@ from .world import CITY_RADIUS, City, WorldMap, chebyshev
 
 
 def _find_tile(world: WorldMap, kind: str, cx: int, cy: int, max_r: int = 14):
-    best = None
-    best_d = 99
-    for t in world.iter_tiles():
-        ok, _ = world.check_build(kind, t.x, t.y)
-        if not ok:
-            continue
-        d = chebyshev(t.x, t.y, cx, cy)
-        if d < best_d and d <= max_r:
-            best, best_d = (t.x, t.y), d
-    return best
+    """在 (cx,cy) 周围的环上找第一个可建格（大图上不能扫全图）。"""
+    hit = world.find_tiles(kind, limit=1, near=(cx, cy), radius=max_r)
+    return hit[0] if hit else None
 
 
 @dataclass
@@ -93,13 +86,16 @@ class Game:
 
     # ------------------------------------------------------------ 构造
     @classmethod
-    def new_game(cls, seed: int | None = None) -> "Game":
-        """开一局新游戏。seed 为空就随机取一个（想复现就把种子记下来）。"""
+    def new_game(cls, seed: int | None = None, world: "WorldMap | None" = None) -> "Game":
+        """开一局新游戏。seed 为空就随机取一个（想复现就把种子记下来）。
+
+        `world` 可以塞一张现成的地图（测试里复用，省掉每次 1.5s 的生成）。
+        """
         if seed is None:
             seed = random.SystemRandom().randrange(1, 2 ** 31 - 1)
         g = cls(seed=seed)
         g.rng = random.Random(seed)
-        g.world = WorldMap.generate(seed)
+        g.world = world if world is not None else WorldMap.generate(seed)
         g.policy = policy_for_turn(1)
         g.market_raw = dict(COMMODITY_BASE)
         g.commodity_mod = {"coal": 1.0, "uranium": 1.0}
@@ -166,9 +162,11 @@ class Game:
     def _starter_site(self, co: Company, city: City, kinds: tuple[str, ...]) -> None:
         """给一家公司在城市附近配好"电厂 + 变电站 + 输电线"。"""
         for kind in kinds:
-            spot = _find_tile(self.world, kind, city.x, city.y, max_r=6)
+            spot = _find_tile(self.world, kind, city.x, city.y, max_r=8)
             if spot is None:
-                spot = _find_tile(self.world, kind, city.x, city.y, max_r=14)
+                spot = _find_tile(self.world, kind, city.x, city.y, max_r=40)
+            if spot is None:
+                spot = _find_tile(self.world, kind, city.x, city.y, max_r=160)
             if spot is None:
                 continue
             spec = PLANT_SPECS[kind]
