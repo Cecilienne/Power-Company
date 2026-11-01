@@ -357,7 +357,8 @@ class MapView(ttk.Frame):
         shades = self._shade_table()
         terr = w.terr
         elev = w.elev
-        outline = "#2b2f36" if (block == 1 and ts >= 14) else ""
+        # 网格线平时不画（整片格子像坐标纸）；只有建造模式才显示，方便对准格点
+        outline = "#2b2f36" if (self.build_mode and block == 1 and ts >= 6) else ""
         span = ts * block
         half = block // 2
         for by in range(ya, yb + 1, block):
@@ -436,7 +437,7 @@ class MapView(ttk.Frame):
                         continue
                     c.create_rectangle(x * ts + 1, y * ts + 1,
                                        x * ts + ts - 1, y * ts + ts - 1,
-                                       fill="#0c0e12", outline="", stipple="gray50")
+                                       fill="#0c0e12", outline="", stipple="gray12")
 
         if self.selected:
             x, y = self.selected

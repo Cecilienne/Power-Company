@@ -1165,6 +1165,8 @@ class App(tk.Tk):
         # 960×960 全图逐格检查要 1~2 秒，只算视野附近（外扩 40 格）——
         # 玩家看到的范围里"能建/不能建"都对，拖到别处再进一次建造模式即可
         w = self.game.world
+        # 刚 focus_on / 刚滚过，画布的滚动位置要等一次 idle 才生效，先让它落定
+        self.map.update_idletasks()
         xa, ya, xb, yb = self.map._visible_tiles()
         pad = 40
         valid = {(x, y)
