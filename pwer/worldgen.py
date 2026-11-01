@@ -21,8 +21,8 @@ from . import terrain as terrain_mod
 from .constants import Terrain
 
 COARSE = 60           # 粗网格边长（契约管线的实际运行尺寸）
-FINE = 480            # 细网格边长（真正的游戏棋盘）
-K = FINE // COARSE    # 8：一个粗格 = 8×8 细格
+FINE = 360            # 细网格边长（真正的游戏棋盘）
+K = FINE // COARSE    # 6：一个粗格 = 6×6 细格
 
 _ORDER = (Terrain.PLAIN, Terrain.HILL, Terrain.RIVER, Terrain.DESERT,
           Terrain.COAST, Terrain.CITY)
@@ -134,7 +134,7 @@ def expand(tm, size: int = FINE, seed: int = 0) -> dict:
     cw, ch = tm.w, tm.h
     noise = _noise_grid(rng)
     # 细尺度抖动查表：每 4 格一个值，比每格调用一次噪声函数快一个数量级
-    jn = 120
+    jn = 200
     j_e = [[rng.uniform(-26.0, 26.0) for _ in range(jn)] for _ in range(jn)]
     j_m = [[rng.uniform(-0.05, 0.05) for _ in range(jn)] for _ in range(jn)]
     j_w = [[rng.uniform(-0.10, 0.10) for _ in range(jn)] for _ in range(jn)]
@@ -187,20 +187,20 @@ def expand(tm, size: int = FINE, seed: int = 0) -> dict:
             + 2.4 * _sample(noise, y / 37.0, 11.3)
         row = y * w
         fy = float(y)
-        jy = y >> 2
-        je_row = j_e[jy]
-        jm_row = j_m[jy]
-        jw_row = j_w[jy]
-        js_row = j_s[jy]
+        jy4 = y >> 2
         for x in range(w):
             fx = float(x)
             i = row + x
-            jx = x >> 2
 
-            e = bilinear(ge, fx, fy) + je_row[jx]
-            m = bilinear(gm, fx, fy) + jm_row[jx]
-            wnd = bilinear(gw, fx, fy) + jw_row[jx]
-            sol = bilinear(gs, fx, fy) + js_row[jx]
+            # 细尺度细节：两个八度的噪声（~±70m），让平原/丘陵交界长出毛边，
+            # 不再是"一个粗格一整块同色"
+            det = 74.0 * (0.68 * _sample(noise, fx / 27.0, fy / 27.0)
+                          + 0.32 * _sample(noise, fx / 9.0 + 41.7, fy / 9.0 + 13.1))
+            e = bilinear(ge, fx, fy) + det
+            m = bilinear(gm, fx, fy) + 0.05 * _sample(noise, fx / 17.0 + 7.3, fy / 17.0 + 31.9)
+            jx = x >> 2
+            wnd = bilinear(gw, fx, fy) + j_w[jy4][jx]
+            sol = bilinear(gs, fx, fy) + j_s[jy4][jx]
 
             # 细尺度抖动：让色块有毛边，但不动大格局
             e = 0.0 if e < 0.0 else (cfg_norm if e > cfg_norm else e)

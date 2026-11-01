@@ -38,7 +38,7 @@ class MapView(ttk.Frame):
     """格子地图。画布是"取景框"，整张棋盘画在里面，可缩放、可拖动。
 
     - 滚轮：以光标为中心缩放（50%~200%）
-    - 中键拖动 / Shift+左键拖动：平移
+    - 右键拖动（也支持中键 / Shift+左键拖动）：平移
     - `fit()`：缩放到刚好装下整张棋盘并居中（App 的「适应」按钮）
     「适应」之后若窗口变化，App 会重新 fit；玩家自己缩放/拖动过就不再抢。
     """
@@ -66,8 +66,11 @@ class MapView(ttk.Frame):
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Motion>", self._motion)
         self.canvas.bind("<Leave>", lambda e: self.on_hover(None))
-        # 缩放：滚轮；平移：中键拖 / Shift+左键拖
+        # 缩放：滚轮；平移：右键拖（主）/ 中键拖 / Shift+左键拖
         self.canvas.bind("<MouseWheel>", self._on_wheel)
+        self.canvas.bind("<ButtonPress-3>", self._pan_start)
+        self.canvas.bind("<B3-Motion>", self._pan_move)
+        self.canvas.bind("<ButtonRelease-3>", self._pan_end)
         self.canvas.bind("<ButtonPress-2>", self._pan_start)
         self.canvas.bind("<B2-Motion>", self._pan_move)
         self.canvas.bind("<ButtonRelease-2>", self._pan_end)
@@ -320,7 +323,7 @@ class MapView(ttk.Frame):
         table = []
         for t in TERRAIN_ORDER:
             base = TERRAIN_INFO[t].color
-            table.append(tuple(_shade(base, f) for f in (0.90, 1.0, 1.10)))
+            table.append(tuple(_shade(base, f) for f in (0.87, 0.95, 1.03, 1.11)))
         self._shades = table
         self._shade_key = key
         return table
@@ -365,7 +368,8 @@ class MapView(ttk.Frame):
                 if ti == CITY_TERRAIN_IDX:
                     fill = "#8f7f6d"
                 else:
-                    fill = shades[ti][_elev_bucket(elev[sy * W + sx])]
+                    name = TERRAIN_ORDER[ti].value
+                    fill = shades[ti][_elev_bucket(elev[sy * W + sx], name)]
                 x0 = bx * ts
                 y0 = by * ts
                 c.create_rectangle(x0, y0, x0 + span, y0 + span,
@@ -548,10 +552,25 @@ class MapView(ttk.Frame):
                               font=("Microsoft YaHei UI", -int(ts * 0.20), "bold"))
 
 
-def _elev_bucket(e: float) -> int:
-    """高程 0~1200 分三档（低/中/高），给底图配三档色。"""
-    n = e / 1200.0
-    return 0 if n < 0.34 else (1 if n < 0.68 else 2)
+# 每种地形自己的高程带（和 terrain.py 的阈值对齐），带内再分四档：
+# 平原整片 0~480m 如果只按全图 0~1200 分档，会全部落在同一档 → 看起来一块死绿。
+_BAND = {
+    "PLAIN": (0.0, 480.0),
+    "DESERT": (0.0, 660.0),
+    "HILL": (420.0, 1200.0),
+    "RIVER": (0.0, 1.0),
+    "COAST": (0.0, 1.0),
+    "CITY": (0.0, 1.0),
+}
+
+
+def _elev_bucket(e: float, terrain_name: str = "PLAIN") -> int:
+    """按该地形的高程带取 0..3 档，给底图配四档色。"""
+    lo, hi = _BAND.get(terrain_name, (0.0, 1200.0))
+    if hi <= lo:
+        return 1
+    n = (e - lo) / (hi - lo)
+    return 0 if n < 0.25 else (1 if n < 0.5 else (2 if n < 0.75 else 3))
 
 
 def _shade(color: str, factor: float) -> str:

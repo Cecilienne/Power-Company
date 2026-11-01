@@ -540,7 +540,7 @@ class TestTerrain(unittest.TestCase):
     def test_fine_map_scale_and_mix(self) -> None:
         wm = self.wm
         n = wm.w * wm.h
-        self.assertEqual((wm.w, wm.h), (480, 480))
+        self.assertEqual((wm.w, wm.h), (360, 360))
         coast = wm.terr.count(4)
         plain = wm.terr.count(0)
         self.assertTrue(0.08 <= coast / n <= 0.20, f"细网格 COAST {coast / n:.1%}")

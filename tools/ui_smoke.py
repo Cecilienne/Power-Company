@@ -36,6 +36,9 @@ def main() -> None:
     city = g.world.cities[2]          # 钢城
     me.cash = 400_000
     for kind in ("substation", "coal"):
+        # set_build 只算"视野附近"的可建格，先把镜头挪到钢城
+        app.map.focus_on(city.x, city.y, 0.4)
+        app.update()
         app.set_build(kind)
         # 480×480 上城市周围 7×7 未必有可建格，用环形搜索找最近的合规位置
         hits = g.world.find_tiles(kind, limit=1, near=(city.x, city.y), radius=40)

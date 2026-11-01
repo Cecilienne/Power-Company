@@ -25,8 +25,8 @@ from .constants import (
     Terrain,
 )
 
-GRID_W = 480
-GRID_H = 480           # 方形棋盘：480×480 格 = 230,400 格
+GRID_W = 360
+GRID_H = 360           # 方形棋盘：360×360 格 = 129,600 格
 MAP_PX = 1080          # 旧口径（像素），保留给老代码引用
 TILE_PX = 60           # 100% 缩放时一个格子的像素边长
 CITY_RADIUS = 2        # 城市供电接入半径（切比雪夫距离）
