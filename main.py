@@ -3,11 +3,13 @@
     python main.py                 # 启动图形界面：先进启动页，点【开始】进游戏
     python main.py --seed 2026     # 指定地图/随机种子
     python main.py --selftest      # 无窗口自检（打包后验证 exe 是否完整）
+    python main.py --audio-test    # 只验背景音乐：响 3 秒，放不出来会写原因
 """
 from __future__ import annotations
 
 import os
 import sys
+import time
 
 
 def _tcl_headless_ok(say) -> bool:
@@ -102,6 +104,37 @@ def selftest() -> int:
     return code
 
 
+def audio_test(seconds: float = 3.0) -> int:
+    """`--audio-test`：只验背景音乐这一条链，最多响 3 秒。
+
+    排查"点了开关但没声音"时用它：能出声就不是播放器的问题，
+    出不了声也会把原因写在屏幕上和 audio.log 里。
+    """
+    import tkinter as tk
+
+    from pwer import audio, paths
+
+    path = str(paths.asset("assets", "bgm", "bgm_01.mp4"))
+    print(f"音频文件：{path}")
+    print(f"文件存在：{os.path.exists(path)}")
+    root = tk.Tk()
+    root.withdraw()
+    ok = audio.BGM.start(root, path)
+    print(f"start() -> {ok}")
+    print(f"available -> {audio.BGM.available()}")
+    print(f"reason -> {audio.BGM.reason or '（无）'}")
+    if ok:
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            root.update()
+            audio.BGM.poll()
+            time.sleep(0.05)
+    audio.BGM.stop()
+    root.destroy()
+    print("结果：", "能放" if ok else "放不出来")
+    return 0 if ok else 3
+
+
 def main() -> int:
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
     if "--help" in sys.argv or "-h" in sys.argv:
@@ -109,6 +142,8 @@ def main() -> int:
         return 0
     if "--selftest" in sys.argv:
         return selftest()
+    if "--audio-test" in sys.argv:
+        return audio_test()
 
     seed = 20240501
     if "--seed" in sys.argv:

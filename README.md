@@ -20,6 +20,7 @@ python main.py --seed 2026     # 指定地图/随机种子（换一张地形与�
 其他入口（都是开发自用工具）：
 ```bash
 python main.py --selftest      # 无窗口自检（打包后验收用）
+python main.py --audio-test    # 只验背景音乐：响 3 秒，放不出来会打印原因
 python tools/sim.py 48         # 无头模拟 48 回合，看数值是否健康（开发用）
 python tools/sim.py 12 noisy   # 每回合打印完整利润表
 python tools/balance.py 6      # 机器人跑 6 局，统计胜率与达成回合
@@ -66,6 +67,11 @@ type dist\电力公司\selftest.log
 **常见坑**：改完代码必须重新 `build.bat`（dist 不会自动更新）；只有 Store 版 Python 会报"没找到可用
 Python"；首次运行 PyInstaller 构建会联网抓包；个别杀软对 PyInstaller 产物误报，用目录版 + 告知文件里的
 SHA-256 说明情况。
+
+**没声音**：先跑 `电力公司.exe --audio-test`（或 `python main.py --audio-test`），它会打印
+`start() / available / reason`，并把现场记到存档目录的 `audio.log`。精简版或 N 版 Windows
+缺 Media Foundation 时，音频会显示「不可用」并在 audio.log 里留下 HRESULT —— 这是系统
+限制，其余功能不受影响。
 
 **发布**：仓库里只放游戏源码，不跑 CI。发布版一律**本地打包**（`build.bat` 会产出
 `release\电力公司-<版本>-win64.zip` 与同名 `.sha256`），再把 zip 拖到 GitHub Release 的
