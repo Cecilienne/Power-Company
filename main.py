@@ -112,14 +112,19 @@ def audio_test(seconds: float = 3.0) -> int:
     """
     import tkinter as tk
 
-    from pwer import audio, paths
+    from pwer import audio
 
-    path = str(paths.asset("assets", "bgm", "bgm_01.mp4"))
-    print(f"音频文件：{path}")
-    print(f"文件存在：{os.path.exists(path)}")
+    tracks = audio.BGM.reload()
+    print(f"曲库：{len(tracks)} 首（{audio.AUDIO_EXTS_LABEL}）")
+    for i, t in enumerate(tracks):
+        print(f"  {i:02d}  {t.name}  [{t.source}]  {t.path}")
+    if not tracks:
+        print("结果：曲库里没有可播放的文件")
+        return 3
+
     root = tk.Tk()
     root.withdraw()
-    ok = audio.BGM.start(root, path)
+    ok = audio.BGM.play_index(0)
     print(f"start() -> {ok}")
     print(f"available -> {audio.BGM.available()}")
     print(f"reason -> {audio.BGM.reason or '（无）'}")

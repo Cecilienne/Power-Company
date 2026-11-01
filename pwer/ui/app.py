@@ -220,10 +220,17 @@ class App(tk.Tk):
         if prefs.get("audio") != "on":
             audio.BGM.stop()
             return
-        path = str(paths.asset("assets", "bgm", "bgm_01.mp4"))
-        if audio.BGM.available() and audio.BGM.path == path:
+        audio.BGM.reload()
+        if not audio.BGM.tracks:
+            prefs.put("audio", "off")
+            prefs.save()
             return
-        if not audio.BGM.start(self, path):
+        if audio.BGM.available():
+            return                    # 已经在放，切界面不该重启
+        idx = audio.BGM.find(str(prefs.get("track") or ""))
+        if idx < 0:
+            idx = 0
+        if not audio.BGM.play_index(idx):
             # 放不出来就别留着"开"的假状态
             prefs.put("audio", "off")
             prefs.save()
@@ -231,9 +238,18 @@ class App(tk.Tk):
     def _bgm_tick(self) -> None:
         try:
             audio.BGM.poll()
+            self._music_sync()
         except Exception:  # noqa: BLE001
             pass
         self.after(1500, self._bgm_tick)
+
+    def _music_sync(self) -> None:
+        """自动切歌后，若正开着音乐页就把「正在播放」刷过来（没变化就不重画）。"""
+        if getattr(self, "panel", None) != "music":
+            return
+        cur = audio.BGM.index if audio.BGM.available() else -1
+        if getattr(self, "_music_key", None) != (cur, len(audio.BGM.tracks)):
+            self._refresh_music()
 
     def destroy(self) -> None:
         try:
@@ -369,7 +385,8 @@ class App(tk.Tk):
         tk.Label(inner, text="其它 / MORE", bg=UI_BG, fg=UI_DIM2, font=(FONT, 7),
                  anchor="w").pack(fill="x", pady=(0, P(2)))
         for label, cmd in (("菜单", self.back_to_menu), ("存档", self.save_game),
-                           ("读档", self.load_game), ("规则", self.show_rules)):
+                           ("读档", self.load_game), ("规则", self.show_rules),
+                           ("音乐", lambda: self.toggle_panel("music"))):
             tk.Button(inner, text=label, command=cmd, bg=UI_PANEL2, fg=UI_DIM,
                       activebackground=UI_HOVER, activeforeground=UI_TEXT,
                       bd=0, relief="flat", font=(FONT, 9), anchor="w",
@@ -461,9 +478,11 @@ class App(tk.Tk):
         self.tab_log = tk.Frame(body, bg=UI_PANEL)
         self.tab_mkt = tk.Frame(body, bg=UI_PANEL)
         self._co_panel = tk.Frame(body, bg=UI_PANEL)
+        self.tab_music = tk.Frame(body, bg=UI_PANEL)
         self._build_log(self.tab_log)
         self._build_mkt(self.tab_mkt)
         self._build_company(self._co_panel)
+        self._build_music(self.tab_music)
 
         stage.bind("<Configure>", self._on_stage_resize)
 
@@ -511,6 +530,119 @@ class App(tk.Tk):
         self.btn_co_ops.config(style="Accent.TButton" if which == "ops" else "Small.TButton")
         self.btn_co_fin.config(style="Accent.TButton" if which == "fin" else "Small.TButton")
 
+    # ------------------------------------------------------------ 音乐面板（曲库）
+    def _build_music(self, root) -> None:
+        P = scale.px
+        head = tk.Frame(root, bg=UI_PANEL)
+        head.pack(fill="x", padx=P(8), pady=(P(6), P(2)))
+        self.lbl_music_now = tk.Label(head, text="", bg=UI_PANEL, fg=UI_YELLOW,
+                                      font=(FONT, 10, "bold"), anchor="w")
+        self.lbl_music_now.pack(fill="x")
+        self.lbl_music_hint = tk.Label(head, text="", bg=UI_PANEL, fg=UI_DIM,
+                                       justify="left", anchor="w", font=(FONT, 8))
+        self.lbl_music_hint.pack(fill="x", pady=(P(2), 0))
+
+        bar = tk.Frame(root, bg=UI_PANEL)
+        bar.pack(fill="x", padx=P(8), pady=(P(2), P(4)))
+        ttk.Button(bar, text="下一首", style="Small.TButton",
+                   command=self._music_next).pack(side="left")
+        ttk.Button(bar, text="停止", style="Small.TButton",
+                   command=self._music_stop).pack(side="left", padx=P(4))
+        ttk.Button(bar, text="重新扫描", style="Small.TButton",
+                   command=self._refresh_music).pack(side="left")
+
+        self.music_list = tk.Frame(root, bg=UI_PANEL)
+        self.music_list.pack(fill="both", expand=True, padx=P(8), pady=(P(2), P(8)))
+
+    def _refresh_music(self) -> None:
+        """重扫曲库并重画列表（玩家往 bgm/ 里丢了新歌后按「重新扫描」即可）。"""
+        P = scale.px
+        audio.BGM.reload()
+        for w in self.music_list.winfo_children():
+            w.destroy()
+        tracks = audio.BGM.tracks
+        cur = audio.BGM.index if audio.BGM.available() else -1
+        self._music_key = (cur, len(tracks))
+        if 0 <= cur < len(tracks):
+            self.lbl_music_now.config(text=f"正在播放  {cur + 1:02d} · {tracks[cur].name}",
+                                      fg=UI_YELLOW)
+        else:
+            self.lbl_music_now.config(text="未播放", fg=UI_DIM2)
+        self.lbl_music_hint.config(
+            text=(f"共 {len(tracks)} 首 · 列表循环（放完自动下一首）\n"
+                  f"投递目录：{paths.music_dir()}\n"
+                  f"支持 {audio.AUDIO_EXTS_LABEL}"))
+
+        if not tracks:
+            tk.Label(self.music_list, text="还没有音乐文件", bg=UI_PANEL, fg=UI_DIM,
+                     font=(FONT, 9), anchor="w").pack(fill="x", pady=P(4))
+            return
+
+        for i, t in enumerate(tracks):
+            on = (i == cur)
+            bg = UI_RED if on else UI_PANEL2
+            fg = UI_TEXT
+            row = tk.Frame(self.music_list, bg=bg, cursor="hand2")
+            row.pack(fill="x", pady=P(3))
+            kids = []
+            idx = tk.Label(row, text=f"{i + 1:02d}", bg=bg, fg=("#F6D9D6" if on else UI_DIM2),
+                           font=(FONT, 8), width=3, anchor="w")
+            idx.pack(side="left", padx=(P(4), 0))
+            name = tk.Label(row, text=t.name, bg=bg, fg=fg, font=(FONT, 9),
+                            anchor="w", justify="left")
+            name.pack(side="left", fill="x", expand=True, padx=P(4))
+            src = tk.Label(row, text=t.source, bg=bg, fg=("#F6D9D6" if on else UI_DIM),
+                           font=(FONT, 7), width=4)
+            src.pack(side="left")
+            mark = tk.Label(row, text="▶" if on else "  ", bg=bg,
+                            fg=(UI_TEXT if on else UI_DIM2), font=(FONT, 9), width=2)
+            mark.pack(side="left", padx=(0, P(4)))
+            kids = (row, idx, name, src, mark)
+
+            for w in kids:
+                w.bind("<Button-1>", lambda e, k=i: self._music_play(k))
+                if not on:
+                    w.bind("<Enter>", lambda e, ws=kids: [x.config(bg=UI_HOVER) for x in ws])
+                    w.bind("<Leave>", lambda e, ws=kids: [x.config(bg=UI_PANEL2) for x in ws])
+
+    def _music_play(self, index: int) -> None:
+        """点列表里的一首就播它（失败就给原因，不留假状态）。"""
+        if audio.BGM.play_index(index):
+            prefs.put("audio", "on")
+            cur = audio.BGM.current()
+            if cur:
+                prefs.put("track", cur.name)
+            prefs.save()
+            self._refresh_music()
+            return
+        prefs.put("audio", "off")
+        prefs.save()
+        self._refresh_music()
+        try:
+            messagebox.showinfo("音频不可用",
+                                f"{audio.BGM.reason or '本机无法解码这个音频'}\n\n"
+                                "游戏其余功能不受影响。", parent=self)
+        except tk.TclError:
+            pass
+
+    def _music_stop(self) -> None:
+        audio.BGM.stop()
+        prefs.put("audio", "off")
+        prefs.save()
+        self._refresh_music()
+
+    def _music_next(self) -> None:
+        if not audio.BGM.tracks:
+            self._refresh_music()
+            return
+        if audio.BGM.skip():
+            prefs.put("audio", "on")
+            cur = audio.BGM.current()
+            if cur:
+                prefs.put("track", cur.name)
+            prefs.save()
+        self._refresh_music()
+
     # ------------------------------------------------------------ 抽屉开关
     def toggle_panel(self, key: str | None) -> None:
         if key == self.panel:
@@ -519,13 +651,16 @@ class App(tk.Tk):
         if key is None:
             self.drawer.place_forget()
         else:
-            for f in (self.tab_log, self.tab_mkt, self._co_panel):
+            for f in (self.tab_log, self.tab_mkt, self._co_panel, self.tab_music):
                 f.pack_forget()
             frame, title = {
                 "policy": (self.tab_log, "政策 · 日志"),
                 "stock": (self.tab_mkt, "股市 · 行情"),
                 "company": (self._co_panel, "公司 · 经营财报"),
+                "music": (self.tab_music, "音乐 · 曲库"),
             }[key]
+            if key == "music":
+                self._refresh_music()
             self.drawer_title.config(text=title)
             frame.pack(fill="both", expand=True)
             w = min(scale.px(500), max(scale.px(360),

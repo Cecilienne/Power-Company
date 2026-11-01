@@ -35,6 +35,11 @@ import ctypes
 import os
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
+
+# 认这些后缀（Media Foundation 自带解码器的）：mp3 / m4a / aac / mp4 / wav / wma
+AUDIO_EXTS = (".mp3", ".m4a", ".aac", ".mp4", ".wav", ".wma")
+AUDIO_EXTS_LABEL = "mp3 / m4a / aac / mp4 / wav / wma"
 
 MF_VERSION = 0x00020070          # MF_SDK_VERSION(2) | MF_API_VERSION -> 2.0.0
 MFSTARTUP_FULL = 0
@@ -182,19 +187,106 @@ class _MfPlayer:
                 self.available = False
 
 
+@dataclass(frozen=True)
+class Track:
+    """曲库里的一个文件。"""
+
+    path: str
+    name: str            # 显示名（下划线换成空格）
+    builtin: bool        # True = 打包自带的 assets/bgm，False = 玩家放进 bgm/ 的
+    size: int = 0
+
+    @property
+    def source(self) -> str:
+        return "内置" if self.builtin else "用户"
+
+    @property
+    def size_text(self) -> str:
+        mb = self.size / 1048576.0
+        return f"{mb:.1f} MB" if mb >= 0.1 else f"{self.size // 1024} KB"
+
+
+def _pretty(stem: str) -> str:
+    """文件名 → 显示名：下划线/连字符换空格；`bgm_01` 这类全缩写的大写。"""
+    text = stem.replace("_", " ").replace("-", " ").strip()
+    parts = text.split()
+    if parts and all(p.isdigit() or (p.isascii() and p.isalpha() and len(p) <= 4)
+                     for p in parts):
+        text = text.upper()
+    return text
+
+
+def scan_tracks() -> list[Track]:
+    """扫两个目录：玩家目录优先，同名（忽略后缀）以玩家那份为准。
+
+    * `<存档目录>/bgm/`  —— 玩家自己丢进来的
+    * `assets/bgm/`      —— 打包自带的那首
+    """
+    from . import paths
+
+    seen: set[str] = set()
+    out: list[Track] = []
+    folders = ((paths.music_dir(), False), (paths.asset("assets", "bgm"), True))
+    for folder, builtin in folders:
+        try:
+            files = sorted(folder.iterdir(), key=lambda p: p.name.lower())
+        except OSError:
+            continue
+        for f in files:
+            if not f.is_file() or f.suffix.lower() not in AUDIO_EXTS:
+                continue
+            key = f.stem.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                size = f.stat().st_size
+            except OSError:
+                size = 0
+            out.append(Track(str(f), _pretty(f.stem), builtin, size))
+    return out
+
+
 class Bgm:
-    """全局背景音乐（单例由 UI 持有）。"""
+    """全局背景音乐（单例由 UI 持有）。
+
+    曲库 + 列表循环：一首放完自动下一首，放到最后一首回到第一首。
+    """
 
     def __init__(self) -> None:
         self.player: _MfPlayer | None = None
         self.path: str | None = None
         self.reason = ""
+        self.tracks: list[Track] = []
+        self.index = -1
         self._hidden = None            # 屏幕外的 1×1 窗口，专门给 mfplay 渲染画面
+        self._root = None
+        self._failing = 0               # 连续播放失败次数，防止死循环重试
+
+    # -- 曲库
+    def reload(self) -> list[Track]:
+        self.tracks = scan_tracks()
+        return self.tracks
+
+    def current(self) -> Track | None:
+        if 0 <= self.index < len(self.tracks):
+            return self.tracks[self.index]
+        return None
+
+    def find(self, name: str) -> int:
+        """按显示名/文件名找下标，找不到返回 -1。"""
+        low = name.strip().lower()
+        for i, t in enumerate(self.tracks):
+            if low and (t.name.lower() == low or os.path.basename(t.path).lower() == low):
+                return i
+        return -1
 
     # -- 生命周期
     def start(self, root, path: str | None) -> bool:
         """开播；只有真的进入 PLAYING 才返回 True。"""
         self.stop()
+        if root is not None:
+            self._root = root
         if not path or not os.path.exists(path):
             self.reason = "找不到音频文件"
             return False
@@ -227,6 +319,32 @@ class Bgm:
         self.player = None
         return False
 
+    def play_index(self, index: int) -> bool:
+        """播曲库里的第 index 首；失败返回 False（reason 里有人话原因）。"""
+        if not self.tracks:
+            self.reload()
+        if not (0 <= index < len(self.tracks)):
+            self.reason = "没有可播放的曲目"
+            return False
+        track = self.tracks[index]
+        ok = self.start(self._root, track.path)
+        if ok:
+            self.index = index
+            self._failing = 0
+        return ok
+
+    def play_named(self, name: str) -> bool:
+        idx = self.find(name)
+        if idx < 0:
+            idx = 0 if self.tracks else -1
+        return self.play_index(idx) if idx >= 0 else False
+
+    def skip(self) -> bool:
+        """下一首；已经是最后一首就回到第一首（列表循环）。"""
+        if not self.tracks:
+            return False
+        return self.play_index((self.index + 1) % len(self.tracks))
+
     def stop(self) -> None:
         if self.player is not None:
             self.player.close()
@@ -237,8 +355,19 @@ class Bgm:
         return self.player is not None and self.player.available
 
     def poll(self) -> None:
-        if self.player is not None:
-            self.player.replay_if_ended()
+        """曲终自动下一首（列表循环）。UI 每 1.5 秒敲一次。"""
+        if self.player is None:
+            return
+        if self.player.state() != STATE_STOPPED:
+            return
+        if not self.tracks:
+            return
+        self._failing += 1
+        if self._failing > len(self.tracks) + 1:
+            self._log(self._root, "连续播放失败，停止重试")
+            self.stop()
+            return
+        self.play_index((self.index + 1) % len(self.tracks))
 
     # -- 内部
     def _make_hidden(self, root) -> None:

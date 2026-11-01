@@ -19,7 +19,7 @@ from datetime import datetime
 from tkinter import font as tkfont
 from tkinter import messagebox
 
-from .. import audio, paths
+from .. import paths
 from ..constants import (
     BUILD,
     MAX_TURNS,
@@ -403,19 +403,12 @@ class StartScreen(tk.Frame):
         disp = "全屏" if prefs.get("display") == "fullscreen" else "窗口"
         auto = "开" if prefs.get("autosave") else "关"
         chk = "通过" if self.ok else "失败"
-        if prefs.get("audio") != "on":
-            aud = "关"
-        elif audio.BGM.available():
-            aud = "开 · BGM 01"
-        else:
-            aud = "不可用"
         return [
             ("01", "语言", "LANGUAGE", "简体中文", False, False),
             ("02", "显示", "DISPLAY", disp, True, True),
-            ("03", "音频", "AUDIO", aud, True, True),
-            ("04", "难度", "DIFFICULTY", "标准", False, False),
-            ("05", "自动存档", "AUTOSAVE", auto, True, True),
-            ("06", "数据校验", "DATA CHECK", chk, False, True),
+            ("03", "难度", "DIFFICULTY", "标准", False, False),
+            ("04", "自动存档", "AUTOSAVE", auto, True, True),
+            ("05", "数据校验", "DATA CHECK", chk, False, True),
         ]
 
     def _row_action(self, i: int) -> str | None:
@@ -423,7 +416,7 @@ class StartScreen(tk.Frame):
         rows = self._settings_rows()
         if not (0 <= i < len(rows)):
             return None
-        return {"显示": "display", "自动存档": "autosave", "音频": "audio",
+        return {"显示": "display", "自动存档": "autosave",
                 "数据校验": "recheck"}.get(rows[i][1])
 
     def _panel_settings(self, editable: bool) -> None:
@@ -667,31 +660,10 @@ class StartScreen(tk.Frame):
             self.after(60, self._render)
         elif act == "autosave":
             prefs.put("autosave", not prefs.get("autosave"))
-        elif act == "audio":
-            self._toggle_audio()
         elif act == "recheck":
             self.check = self._self_check()
         prefs.save()
         self._render()
-
-    def _toggle_audio(self) -> None:
-        """开/关背景音乐；放不出来就退回「关」，并把原因说清楚。"""
-        if prefs.get("audio") == "on":
-            prefs.put("audio", "off")
-            audio.BGM.stop()
-            return
-        path = paths.asset("assets", "bgm", "bgm_01.mp4")
-        if audio.BGM.start(self._root, str(path)):
-            prefs.put("audio", "on")
-            return
-        prefs.put("audio", "off")
-        reason = audio.BGM.reason or "本机无法解码这个音频"
-        try:
-            messagebox.showinfo("音频不可用",
-                                f"{reason}\n\n游戏其余功能不受影响。",
-                                parent=self._root)
-        except tk.TclError:
-            pass
 
     def _toggle_display(self) -> None:
         prefs.put("display", "windowed" if prefs.get("display") == "fullscreen" else "fullscreen")

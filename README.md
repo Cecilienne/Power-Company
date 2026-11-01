@@ -68,10 +68,15 @@ type dist\电力公司\selftest.log
 Python"；首次运行 PyInstaller 构建会联网抓包；个别杀软对 PyInstaller 产物误报，用目录版 + 告知文件里的
 SHA-256 说明情况。
 
-**没声音**：先跑 `电力公司.exe --audio-test`（或 `python main.py --audio-test`），它会打印
-`start() / available / reason`，并把现场记到存档目录的 `audio.log`。精简版或 N 版 Windows
-缺 Media Foundation 时，音频会显示「不可用」并在 audio.log 里留下 HRESULT —— 这是系统
-限制，其余功能不受影响。
+**没声音**：先跑 `电力公司.exe --audio-test`（或 `python main.py --audio-test`），它会列出曲库、
+试着播第一首，并打印 `start() / available / reason`，现场记到存档目录的 `audio.log`。精简版或
+N 版 Windows 缺 Media Foundation 时，音乐面板会弹「音频不可用」并在 audio.log 里留下 HRESULT
+—— 这是系统限制，其余功能不受影响。
+
+**换背景音乐**：把 `mp3 / m4a / aac / mp4 / wav / wma` 丢进存档目录下的 `bgm\`
+（打包版是 `dist\电力公司\saves\bgm\`，第一次扫描会自动建好）。游戏里左轨【音乐】→
+「音乐 · 曲库」点哪首播哪首，一首放完自动接下一首（列表循环）。
+曲库 = 玩家 `bgm\` + 内置 `assets\bgm\`。启动页设置里没有音频项，音乐只在游戏内管。
 
 **发布**：仓库里只放游戏源码，不跑 CI。发布版一律**本地打包**（`build.bat` 会产出
 `release\电力公司-<版本>-win64.zip` 与同名 `.sha256`），再把 zip 拖到 GitHub Release 的

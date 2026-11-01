@@ -4,7 +4,7 @@
 只输出到 assets/ 与 docs/screenshots/，不在 tools/ 里落任何游戏资源。
 
 用法：
-    python tools/make_icon.py            # 生成 ico + 512 png + 多尺寸预览图
+    python tools/make_icon.py            # 生成 ico + 512/1080 png + 多尺寸预览图
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 ROOT = Path(__file__).resolve().parents[1]
 OUT_ICO = ROOT / "assets" / "app.ico"
 OUT_PNG = ROOT / "assets" / "app_512.png"
+OUT_PNG_MASTER = ROOT / "assets" / "app_1080.png"   # 封面/商店图的母版（1080×1080）
 OUT_PREVIEW = ROOT / "docs" / "screenshots" / "app_icon_preview.png"
 
 # 启动页色板（constants.UI_START_*）
@@ -94,9 +95,11 @@ def main() -> None:
     sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
     base.save(OUT_ICO, format="ICO", sizes=sizes)
     draw(512, framed=False).save(OUT_PNG, format="PNG")
+    draw(1080, framed=False).save(OUT_PNG_MASTER, format="PNG")
     build_preview()
     print(f"已生成 {OUT_ICO} ({OUT_ICO.stat().st_size / 1024:.1f} KB)")
     print(f"已生成 {OUT_PNG} ({OUT_PNG.stat().st_size / 1024:.1f} KB)")
+    print(f"已生成 {OUT_PNG_MASTER} ({OUT_PNG_MASTER.stat().st_size / 1024:.1f} KB)")
 
 
 if __name__ == "__main__":

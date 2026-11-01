@@ -77,3 +77,17 @@ def save_file(name: str = "slot1.pkl") -> Path:
 def asset(*parts: str) -> Path:
     """只读资源（图标、背景音乐）——打包后在 _MEIPASS 里，源码运行时在项目根目录。"""
     return resource_dir().joinpath(*parts)
+
+
+def music_dir(create: bool = True) -> Path:
+    """玩家自己的音乐文件夹：存档目录下的 `bgm\\`，把 mp3/m4a 丢进去就能在游戏里选。
+
+    打包后 `assets/` 在临时目录里只读，所以"加歌"这件事必须落在一个玩家能碰的目录。
+    """
+    d = data_dir() / "bgm"
+    if create:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+    return d
