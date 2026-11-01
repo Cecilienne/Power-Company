@@ -27,7 +27,7 @@ def check(name: str, cond: bool, extra: str = "") -> None:
 
 
 def main() -> None:
-    app = App()
+    app = App(seed=20240501)   # 固定种子：地图随机化之后，冒烟要可复现
     app.update()
     g = app.game
     me = g.player
@@ -40,10 +40,14 @@ def main() -> None:
         app.map.focus_on(city.x, city.y, 0.4)
         app.update()
         app.set_build(kind)
-        # 480×480 上城市周围 7×7 未必有可建格，用环形搜索找最近的合规位置
-        hits = g.world.find_tiles(kind, limit=1, near=(city.x, city.y), radius=40)
+        # 城市附近未必有可建格（煤矿要临水），先找合规位置，再把镜头挪过去点它
+        hits = (g.world.find_tiles(kind, limit=1, near=(city.x, city.y), radius=40)
+                or g.world.find_tiles(kind, limit=1))
         placed = False
         if hits:
+            app.map.focus_on(hits[0][0], hits[0][1], 0.5)
+            app.update()
+            app.set_build(kind)
             app.on_tile_click(*hits[0])
             placed = bool(me.projects)
         check(f"在钢城附近建造 {kind}", placed, f"候选 {hits}")

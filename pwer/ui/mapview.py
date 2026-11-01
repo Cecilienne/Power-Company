@@ -58,6 +58,7 @@ class MapView(ttk.Frame):
         self.manual = False             # 玩家自己缩放过 → 窗口变化不再自动 fit
         self._pan_from: Optional[tuple[int, int]] = None
         self._redraw_job: Optional[str] = None
+        self._drawn: Optional[tuple[int, int, int, int]] = None
         self._shades: Optional[list[tuple[str, str, str]]] = None
         self._shade_key: tuple = ()
 
@@ -228,8 +229,16 @@ class MapView(ttk.Frame):
 
     def _redraw_now(self) -> None:
         self._redraw_job = None
-        if self.game is not None and not self._busy:
-            self.draw(self.game)
+        if self.game is None or self._busy:
+            return
+        # 拖动/滚轮只是移动视口：画过的那块还盖得住就交给 canvas 自己滚，
+        # 不必把几千个矩形删了重画（Tk 上重画一次要 20~50ms，拖起来就是卡）
+        if self._drawn is not None:
+            xa, ya, xb, yb = self._visible_tiles(pad=0.0)
+            dxa, dya, dxb, dyb = self._drawn
+            if dxa <= xa and dya <= ya and xb <= dxb and yb <= dyb:
+                return
+        self.draw(self.game)
 
     def _keep_anchor(self, ts: int, ex: Optional[int], ey: Optional[int]) -> None:
         """缩放时让光标下的那个点留在原地。"""
@@ -335,9 +344,15 @@ class MapView(ttk.Frame):
         按"一格至少 ~14 像素"聚合，可见矩形数稳定在几千个以内。
         """
         ts = max(1, TS)
-        if ts >= 14:
-            return 1
-        return max(2, int(math.ceil(14.0 / ts)))
+        # 每块至少 ~26px：Tk 的 canvas 一帧画得下几千个矩形，但滚动时整块重绘，
+        # 6000 个 item 滚一下就要 40~60ms，拖起来发滞；控制在两千出头的量级
+        block = 1 if ts >= 12 else max(2, int(math.ceil(12.0 / ts)))
+        # 再按"最多 ~6000 个矩形"兜一次：整图缩放时 TS 只有 3~4，
+        # 5,000~8,000 个矩形在 Tk 上就要 30~60ms，拖起来会明显卡
+        xa, ya, xb, yb = self._visible_tiles(pad=0.0)
+        while (xb - xa + 1) > 0 and ((xb - xa + 1) // block + 1) * ((yb - ya + 1) // block + 1) > 4000:
+            block += 1
+        return block
 
     def draw(self, game) -> None:
         self.game = game
@@ -349,8 +364,10 @@ class MapView(ttk.Frame):
         xa, ya, xb, yb = self._visible_tiles()
         xb, yb = min(xb, W - 1), min(yb, H - 1)
         if xb < xa or yb < ya:
+            self._drawn = None
             self._sync_scrollregion()
             return
+        self._drawn = (xa, ya, xb, yb)
         block = self._lod_block()
 
         # 1) 地形底图（LOD 聚合）
@@ -361,8 +378,13 @@ class MapView(ttk.Frame):
         outline = "#2b2f36" if (self.build_mode and block == 1 and ts >= 6) else ""
         span = ts * block
         half = block // 2
+        # 同一行里颜色相同的相邻块合成一个矩形：整片平原/海面只占几个 item。
+        # 有网格线时不合并（否则格子线就没了）。
+        merge = not outline
         for by in range(ya, yb + 1, block):
             sy = min(H - 1, by + half)
+            run_x = -1
+            run_fill = ""
             for bx in range(xa, xb + 1, block):
                 sx = min(W - 1, bx + half)
                 ti = terr[sy * W + sx]
@@ -371,10 +393,23 @@ class MapView(ttk.Frame):
                 else:
                     name = TERRAIN_ORDER[ti].value
                     fill = shades[ti][_elev_bucket(elev[sy * W + sx], name)]
-                x0 = bx * ts
-                y0 = by * ts
-                c.create_rectangle(x0, y0, x0 + span, y0 + span,
-                                   fill=fill, outline=outline, width=1)
+                if merge:
+                    if fill == run_fill:
+                        continue
+                    if run_x >= 0:
+                        c.create_rectangle(run_x * ts, by * ts,
+                                           bx * ts, by * ts + span,
+                                           fill=run_fill, outline="")
+                    run_x, run_fill = bx, fill
+                else:
+                    x0 = bx * ts
+                    y0 = by * ts
+                    c.create_rectangle(x0, y0, x0 + span, y0 + span,
+                                       fill=fill, outline=outline, width=1)
+            if merge and run_x >= 0:
+                end = (xb + block) * ts
+                c.create_rectangle(run_x * ts, by * ts, end, by * ts + span,
+                                   fill=run_fill, outline="")
 
         # 2) 线路（在所有地块之上、建筑之下）
         for owner, x, y in w.all_owned():
@@ -409,34 +444,41 @@ class MapView(ttk.Frame):
                                (city.y + CITY_RADIUS + 1) * ts - 2,
                                outline="#ffd479", width=1, dash=(4, 3))
 
-        # 4) 建筑 / 资源点：只画可见范围里有内容的格子
-        coal, uranium, kind = w.coal, w.uranium, w.kind
-        for y in range(ya, yb + 1):
-            base = y * W
-            for x in range(xa, xb + 1):
-                i = base + x
-                if kind[i]:
-                    self._draw_occupant(game, w.tile(x, y))
-                elif coal[i] > 0 or uranium[i] > 0:
-                    x0, y0 = x * ts, y * ts
-                    r = max(1.5, ts * 0.09)
-                    if coal[i] > 0:
-                        c.create_oval(x0 + ts * 0.18 - r, y0 + ts * 0.82 - r,
-                                      x0 + ts * 0.18 + r, y0 + ts * 0.82 + r,
-                                      fill="#1e1e1e", outline="#000")
-                    if uranium[i] > 0:
-                        c.create_oval(x0 + ts * 0.82 - r, y0 + ts * 0.82 - r,
-                                      x0 + ts * 0.82 + r, y0 + ts * 0.82 + r,
-                                      fill="#3fae5a", outline="#000")
+        # 4) 建筑 / 资源点：稀疏遍历（有主的格子只有几十个、矿点只有几个），
+        #    别按可视矩形逐格扫——整图缩放时那是十几万次循环
+        coal, uranium = w.coal, w.uranium
+        for _owner, x, y in w.all_owned():
+            if xa <= x <= xb and ya <= y <= yb:
+                self._draw_occupant(game, w.tile(x, y))
+        for sx, sy in w.coal_spots:
+            if xa <= sx <= xb and ya <= sy <= yb and coal[sy * W + sx] > 0:
+                x0, y0 = sx * ts, sy * ts
+                r = max(1.5, ts * 0.09)
+                c.create_oval(x0 + ts * 0.18 - r, y0 + ts * 0.82 - r,
+                              x0 + ts * 0.18 + r, y0 + ts * 0.82 + r,
+                              fill="#1e1e1e", outline="#000")
+        for sx, sy in w.uranium_spots:
+            if xa <= sx <= xb and ya <= sy <= yb and uranium[sy * W + sx] > 0:
+                x0, y0 = sx * ts, sy * ts
+                r = max(1.5, ts * 0.09)
+                c.create_oval(x0 + ts * 0.82 - r, y0 + ts * 0.82 - r,
+                              x0 + ts * 0.82 + r, y0 + ts * 0.82 + r,
+                              fill="#3fae5a", outline="#000")
 
         # 5) 建造模式：可见范围内把不可建的格子压暗
         if self.build_mode and self.valid_tiles:
-            for y in range(ya, yb + 1):
-                for x in range(xa, xb + 1):
-                    if (x, y) in self.valid_tiles:
+            bsz = max(1, block)
+            # 先把"有可建格"的块标出来，再按块压暗：O(可建格 + 块数)
+            lit = set()
+            for (vx, vy) in self.valid_tiles:
+                lit.add((vx // bsz, vy // bsz))
+            span_d = ts * bsz
+            for by in range(ya, yb + 1, bsz):
+                for bx in range(xa, xb + 1, bsz):
+                    if (bx // bsz, by // bsz) in lit:
                         continue
-                    c.create_rectangle(x * ts + 1, y * ts + 1,
-                                       x * ts + ts - 1, y * ts + ts - 1,
+                    c.create_rectangle(bx * ts, by * ts,
+                                       bx * ts + span_d, by * ts + span_d,
                                        fill="#0c0e12", outline="", stipple="gray12")
 
         if self.selected:
