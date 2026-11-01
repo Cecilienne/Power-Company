@@ -93,7 +93,10 @@ class Game:
 
     # ------------------------------------------------------------ 构造
     @classmethod
-    def new_game(cls, seed: int = 20240501) -> "Game":
+    def new_game(cls, seed: int | None = None) -> "Game":
+        """开一局新游戏。seed 为空就随机取一个（想复现就把种子记下来）。"""
+        if seed is None:
+            seed = random.SystemRandom().randrange(1, 2 ** 31 - 1)
         g = cls(seed=seed)
         g.rng = random.Random(seed)
         g.world = WorldMap.generate(seed)

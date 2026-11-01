@@ -117,6 +117,7 @@ def main() -> None:
     turns = int(sys.argv[1]) if len(sys.argv) > 1 else 30
     noisy = len(sys.argv) > 2 and sys.argv[2] == "noisy"
     g = Game.new_game()
+    print("种子：", g.seed, "（想复现就把这个数传给 Game.new_game）")
     print("初始：", " | ".join(c.summary_line() for c in g.companies))
     print("城市需求：", ", ".join(f"{c.name}{c.demand_mw:.0f}MW" for c in g.world.cities))
     print("-" * 118)

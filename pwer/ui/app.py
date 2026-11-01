@@ -71,7 +71,7 @@ def chg_pct(co: Company) -> float:
 
 class App(tk.Tk):
     def __init__(self, game: Game | None = None, intro: bool = True,
-                 show_start: bool = False, seed: int = 20240501) -> None:
+                 show_start: bool = False, seed: int | None = None) -> None:
         super().__init__()
         S = scale.init(self)
         mapview.TS = scale.px(TS_LOGICAL)
@@ -1372,6 +1372,7 @@ class App(tk.Tk):
         self.refresh()
 
     def _intro(self) -> None:
+        g = self.game
         messagebox.showinfo(
             "开局提示",
             "你接手了一家地方电力公司（盛阳电力）。\n\n"
@@ -1380,6 +1381,7 @@ class App(tk.Tk):
             "· 电厂必须靠【变电站 + 输电线路】接到城市，否则电送不出去。\n"
             "· 固定成本每季度照扣，别盲目堆装机；电价太高丢客户，太低亏钱。\n"
             "· 对手财报变差时股价会跌——那就是你低价收购的机会。\n\n"
+            f"本局地图种子 {g.seed}：地形、矿脉、城市位置都由它铺开（同种子逐格一致）。\n"
             "详细规则见菜单【帮助 → 玩法与规则】。")
 
     def save_game(self, silent: bool = False) -> None:
@@ -1423,7 +1425,8 @@ class App(tk.Tk):
         txt = tk.Text(win, bg=BG2, fg=UI_TEXT, wrap="word", font=(FONT, 10),
                       padx=scale.px(12), pady=scale.px(10), bd=0)
         txt.pack(fill="both", expand=True, padx=scale.px(8), pady=scale.px(8))
-        txt.insert("1.0", RULES)
+        seed = getattr(self.game, "seed", 0)
+        txt.insert("1.0", RULES + f"\n\n本局地图种子：{seed}\n（地形、矿脉、城市位置都由它铺开；同种子逐格一致，想复现同一张图就记下这个数。）")
         txt.configure(state="disabled")
 
     # ------------------------------------------------------------ 刷新
