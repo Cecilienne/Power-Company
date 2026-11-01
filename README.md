@@ -67,6 +67,10 @@ type dist\电力公司\selftest.log
 Python"；首次运行 PyInstaller 构建会联网抓包；个别杀软对 PyInstaller 产物误报，用目录版 + 告知文件里的
 SHA-256 说明情况。
 
+**发布**：仓库里只放游戏源码，不跑 CI。发布版一律**本地打包**（`build.bat` 会产出
+`release\电力公司-<版本>-win64.zip` 与同名 `.sha256`），再把 zip 拖到 GitHub Release 的
+"Attach binaries" 里上传即可。这样 GitHub 上不会出现构建产物，也不用维护构建机。
+
 ---
 
 ## 一局游戏在玩什么
