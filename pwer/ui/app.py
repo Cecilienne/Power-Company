@@ -436,12 +436,24 @@ class App(tk.Tk):
         strip.pack(side="bottom", fill="x")
         self.legend_row = tk.Frame(strip, bg=UI_PANEL)
         self.legend_row.pack(side="left", padx=P(8), pady=P(3))
+
+        # 缩放控件（右下）：− 比例 + 适应
+        self.zoom_lbl = tk.Label(strip, text="100%", bg=UI_PANEL, fg=UI_DIM,
+                                 font=(FONT, 8), width=P(4), anchor="e")
+        self.zoom_lbl.pack(side="right", padx=(P(2), P(10)))
+        self._zoom_btn(strip, "适应", self._map_fit_view).pack(side="right", padx=P(2))
+        self._zoom_btn(strip, "+", self._map_zoom_in).pack(side="right", padx=P(2))
+        self._zoom_btn(strip, "−", self._map_zoom_out).pack(side="right", padx=P(2))
+
         self.lbl_tile = tk.Label(strip, text="点击地图查看地块", bg=UI_PANEL, fg=UI_DIM,
                                  anchor="w", justify="left", font=(FONT, 8))
         self.lbl_tile.pack(side="left", fill="x", expand=True, padx=P(8))
 
-        self.map = MapView(stage, self.on_tile_click, self.on_hover)
-        self.map.place(relx=0.5, rely=0.5, anchor="center")
+        self.map_host = tk.Frame(stage, bg=UI_BG)
+        self.map_host.pack(fill="both", expand=True)
+        self.map = MapView(self.map_host, self.on_tile_click, self.on_hover,
+                           on_zoom=self._on_map_zoom)
+        self.map.pack(fill="both", expand=True)
 
         # 抽屉：选中左侧页签时盖在地图右侧，不挤压地图
         self.drawer = tk.Frame(stage, bg=UI_PANEL, highlightthickness=1,
@@ -680,14 +692,36 @@ class App(tk.Tk):
         self._map_fit_job = None
         if not hasattr(self, "map"):
             return
-        w = self.stage.winfo_width() - scale.px(12)
-        h = self.stage.winfo_height() - scale.px(34)
-        if w < 80 or h < 80:
+        if self.map.canvas.winfo_width() < 60:
             return
-        ts = int(min(w / world.GRID_W, h / world.GRID_H))
-        ts = max(scale.px(18), min(ts, scale.px(world.TILE_PX)))
-        if ts != mapview.TS:
-            self.map.set_tile(ts)
+        # 玩家自己缩放过就不抢镜头，只有「适应」或刚开局才重新贴合窗口。
+        if self.map.manual:
+            return
+        self.map.fit()
+
+    # -- 地图缩放控件
+    def _zoom_btn(self, parent, text: str, command):
+        P = scale.px
+        btn = tk.Button(parent, text=text, command=command, bg=UI_PANEL2, fg=UI_TEXT,
+                        activebackground=UI_HOVER, activeforeground=UI_TEXT,
+                        bd=0, relief="flat", padx=P(9), pady=P(1),
+                        font=(FONT, 8), cursor="hand2")
+        btn.bind("<Enter>", lambda e: btn.config(bg=UI_HOVER))
+        btn.bind("<Leave>", lambda e: btn.config(bg=UI_PANEL2))
+        return btn
+
+    def _map_zoom_in(self) -> None:
+        self.map.zoom_by(mapview.ZOOM_STEP)
+
+    def _map_zoom_out(self) -> None:
+        self.map.zoom_by(1 / mapview.ZOOM_STEP)
+
+    def _map_fit_view(self) -> None:
+        self.map.fit()
+
+    def _on_map_zoom(self, zoom: float) -> None:
+        if hasattr(self, "zoom_lbl"):
+            self.zoom_lbl.config(text=f"{int(round(zoom * 100))}%")
 
     # ------------------------------------------------------------ 公司 · 运营
     def _build_ops(self, root) -> None:

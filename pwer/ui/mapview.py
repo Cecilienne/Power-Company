@@ -21,36 +21,66 @@ from ..constants import (
 )
 from ..world import CITY_RADIUS, GRID_H, GRID_W, Terrain
 
-TS = 36          # 每格像素（由 App 在初始化时按 DPI 改写）
+TS = 60          # 每格像素：18×18 格 = 1080×1080 像素
+BASE_TS = 60     # 100% 缩放时的格子边长（18×60 = 1080）
+
+
+ZOOM_MIN = 0.5
+ZOOM_MAX = 2.0
+ZOOM_STEP = 1.15
 
 
 class MapView(ttk.Frame):
+    """格子地图。画布是"取景框"，整张棋盘画在里面，可缩放、可拖动。
+
+    - 滚轮：以光标为中心缩放（50%~200%）
+    - 中键拖动 / Shift+左键拖动：平移
+    - `fit()`：缩放到刚好装下整张棋盘并居中（App 的「适应」按钮）
+    「适应」之后若窗口变化，App 会重新 fit；玩家自己缩放/拖动过就不再抢。
+    """
+
     def __init__(self, master, on_click: Callable[[int, int], None],
-                 on_hover: Callable[[Optional[tuple[int, int]]], None]):
+                 on_hover: Callable[[Optional[tuple[int, int]]], None],
+                 on_zoom: Optional[Callable[[float], None]] = None):
         super().__init__(master)
         self.on_click = on_click
         self.on_hover = on_hover
+        self.on_zoom = on_zoom
         self.game = None
         self.selected: Optional[tuple[int, int]] = None
         self.build_mode: Optional[str] = None
         self.valid_tiles: set[tuple[int, int]] = set()
-        self.canvas = tk.Canvas(self, width=GRID_W * TS, height=GRID_H * TS,
-                                bg=UI_BG, highlightthickness=0)
-        self.canvas.pack(padx=4, pady=4)
+        self.zoom = 1.0                 # 相对基准格子边长的倍率
+        self.manual = False             # 玩家自己缩放过 → 窗口变化不再自动 fit
+        self._pan_from: Optional[tuple[int, int]] = None
+
+        self._busy = False
+        self.canvas = tk.Canvas(self, bg=UI_BG, highlightthickness=0, bd=0)
         self.canvas.bind("<Button-1>", self._click)
         self.canvas.bind("<Motion>", self._motion)
         self.canvas.bind("<Leave>", lambda e: self.on_hover(None))
+        # 缩放：滚轮；平移：中键拖 / Shift+左键拖
+        self.canvas.bind("<MouseWheel>", self._on_wheel)
+        self.canvas.bind("<ButtonPress-2>", self._pan_start)
+        self.canvas.bind("<B2-Motion>", self._pan_move)
+        self.canvas.bind("<ButtonRelease-2>", self._pan_end)
+        self.canvas.bind("<Shift-ButtonPress-1>", self._pan_start)
+        self.canvas.bind("<Shift-B1-Motion>", self._pan_move)
+        self.canvas.bind("<Shift-ButtonRelease-1>", self._pan_end)
+        self.bind("<Configure>", self._on_resize)
 
     # ------------------------------------------------------------ 交互
     def _tile_at(self, ex: int, ey: int) -> Optional[tuple[int, int]]:
         if self.game is None:
             return None
-        x, y = ex // TS, ey // TS
+        x, y = int(self.canvas.canvasx(ex) // TS), int(self.canvas.canvasy(ey) // TS)
         if 0 <= x < self.game.world.w and 0 <= y < self.game.world.h:
             return x, y
         return None
 
     def _click(self, event) -> None:
+        if event.state & 0x0001:        # Shift+左键是拖动，不是点击
+            return
         pos = self._tile_at(event.x, event.y)
         if pos:
             self.selected = pos
@@ -59,16 +89,162 @@ class MapView(ttk.Frame):
     def _motion(self, event) -> None:
         self.on_hover(self._tile_at(event.x, event.y))
 
-    # ------------------------------------------------------------ 尺寸
+    # ------------------------------------------------------------ 尺寸 / 缩放
     def set_tile(self, ts: int) -> None:
-        """按可用面积重算格子边长（App 在地图区尺寸变化时调用）。"""
+        """直接指定格子边长（App 启动时用），会重画并保持当前视点。"""
+        if self.game is not None:
+            self._keep_centre(lambda: self._set_ts(max(8, int(ts))))
+        else:
+            self._set_ts(max(8, int(ts)))
+
+    def _set_ts(self, ts: int) -> None:
         global TS
         TS = max(8, int(ts))
-        w = self.game.world.w if self.game is not None else 18
-        h = self.game.world.h if self.game is not None else 12
-        self.canvas.config(width=w * TS, height=h * TS)
         if self.game is not None:
             self.draw(self.game)
+        self._sync_scrollregion()
+        self._layout()
+
+    def _layout(self) -> None:
+        """棋盘比视口小 → 画布缩成棋盘大小并居中；比视口大 → 画布铺满当取景框。"""
+        c = self.canvas
+        bw, bh = self._board_px()
+        vw, vh = max(1, self.winfo_width()), max(1, self.winfo_height())
+        # 哪个方向装不下，那个方向才出现"取景框"；另一方向仍旧居中。
+        c.place(relx=0.5, rely=0.5, anchor="center",
+                width=min(bw, vw), height=min(bh, vh))
+        c.configure(scrollregion=(0, 0, bw, bh))
+
+    def _on_resize(self, _event=None) -> None:
+        if self._busy:
+            return
+        self._busy = True
+        try:
+            self._layout()
+            if not self.manual:
+                self.fit()
+        finally:
+            self._busy = False
+
+    def _sync_scrollregion(self) -> None:
+        b = self._board_px()
+        self.canvas.configure(scrollregion=(0, 0, b[0], b[1]))
+
+    def _board_px(self) -> tuple[int, int]:
+        w = self.game.world.w if self.game is not None else GRID_W
+        h = self.game.world.h if self.game is not None else GRID_H
+        return w * TS, h * TS
+
+    def base_ts(self) -> int:
+        return BASE_TS
+
+    def zoom_by(self, factor: float, ex: Optional[int] = None,
+                ey: Optional[int] = None) -> None:
+        self.set_zoom(self.zoom * factor, ex, ey)
+
+    def set_zoom(self, zoom: float, ex: Optional[int] = None,
+                 ey: Optional[int] = None) -> None:
+        """缩放到 zoom（夹在 50%~200%），默认以视口中心为锚点。"""
+        if self.game is None:
+            return
+        zoom = max(ZOOM_MIN, min(ZOOM_MAX, float(zoom)))
+        ts = max(8, int(round(BASE_TS * zoom)))
+        if ts == TS:
+            self.zoom = zoom
+            return
+        self._keep_anchor(ts, ex, ey)
+        self.zoom = ts / BASE_TS
+        self.manual = True
+        if self.on_zoom is not None:
+            self.on_zoom(self.zoom)
+
+    def fit(self) -> None:
+        """缩放到刚好装下整张棋盘并居中；装得下就是 100%，不放大。"""
+        if self.game is None:
+            return
+        vw = max(1, self.winfo_width())
+        vh = max(1, self.winfo_height())
+        board = GRID_W * BASE_TS
+        zoom = min(1.0, vw / board, vh / board)
+        ts = max(8, int(round(BASE_TS * zoom)))
+        self._busy = True
+        try:
+            self._set_ts(ts)
+        finally:
+            self._busy = False
+        self.zoom = ts / BASE_TS
+        self.manual = False
+        self._centre()
+        if self.on_zoom is not None:
+            self.on_zoom(self.zoom)
+
+    def _keep_anchor(self, ts: int, ex: Optional[int], ey: Optional[int]) -> None:
+        """缩放时让光标下的那个点留在原地。"""
+        c = self.canvas
+        if ex is None:
+            ex, ey = c.winfo_width() // 2, c.winfo_height() // 2
+        cx, cy = c.canvasx(ex), c.canvasy(ey)
+        old = TS
+        self._set_ts(ts)
+        nx, ny = cx / old * TS, cy / old * TS
+        self._view_to(nx - ex, ny - ey)
+
+    def _keep_centre(self, fn) -> None:
+        c = self.canvas
+        b = self._board_px()
+        cx = c.canvasx(c.winfo_width() // 2)
+        cy = c.canvasy(c.winfo_height() // 2)
+        fx, fy = cx / max(1, b[0]), cy / max(1, b[1])
+        fn()
+        b2 = self._board_px()
+        self._view_centre(fx * b2[0], fy * b2[1])
+
+    def _view_to(self, x0: float, y0: float) -> None:
+        c = self.canvas
+        bw, bh = self._board_px()
+        vw, vh = c.winfo_width(), c.winfo_height()
+        x0 = max(0.0, min(max(0.0, bw - vw), x0))
+        y0 = max(0.0, min(max(0.0, bh - vh), y0))
+        c.xview_moveto(x0 / max(1, bw))
+        c.yview_moveto(y0 / max(1, bh))
+
+    def _view_centre(self, cx: float, cy: float) -> None:
+        c = self.canvas
+        self._view_to(cx - c.winfo_width() / 2, cy - c.winfo_height() / 2)
+
+    def _centre(self) -> None:
+        bw, bh = self._board_px()
+        self._view_centre(bw / 2, bh / 2)
+
+    # -- 滚轮 / 拖动
+    def _on_wheel(self, event) -> None:
+        step = ZOOM_STEP if event.delta > 0 else 1 / ZOOM_STEP
+        self.zoom_by(step, event.x, event.y)
+        return "break"
+
+    def _pan_start(self, event) -> None:
+        self._pan_from = (event.x, event.y)
+        try:
+            self.canvas.configure(cursor="fleur")
+        except tk.TclError:
+            pass
+
+    def _pan_move(self, event) -> None:
+        if self._pan_from is None:
+            return
+        dx = event.x - self._pan_from[0]
+        dy = event.y - self._pan_from[1]
+        self._pan_from = (event.x, event.y)
+        c = self.canvas
+        self._view_to(c.canvasx(0) - dx, c.canvasy(0) - dy)
+        self.manual = True
+
+    def _pan_end(self, _event) -> None:
+        self._pan_from = None
+        try:
+            self.canvas.configure(cursor="")
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------ 绘制
     def draw(self, game) -> None:
@@ -132,6 +308,7 @@ class MapView(ttk.Frame):
             x, y = self.selected
             c.create_rectangle(x * ts, y * ts, x * ts + ts, y * ts + ts,
                                outline="#ffffff", width=2)
+        self._sync_scrollregion()
 
     def _cc(self, idx: int) -> str:
         return COMPANY_COLORS[idx % len(COMPANY_COLORS)]

@@ -23,7 +23,7 @@ from .constants import (
 
 GRID_W = 18
 GRID_H = 18            # 方形棋盘：18×18 格 = 1080×1080 像素（每格 60）
-MAP_PX = 1080          # 地图在设计稿里的边长（像素，1x）
+MAP_PX = 1080          # 地图边长（实际像素，不随窗口放大）
 TILE_PX = MAP_PX // GRID_W   # 60：格子铺满 1080 时的边长
 CITY_RADIUS = 2          # 城市供电接入半径（切比雪夫距离）
 NUCLEAR_CITY_GAP = 2     # 核电站与城市的最小距离
