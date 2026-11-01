@@ -381,5 +381,71 @@ class TestIssueShares(unittest.TestCase):
         self.assertLessEqual(co.shares, shares0 * 1.15 + 1e-6)
 
 
+class TestTerrain(unittest.TestCase):
+    """锁住 docs/01_terrain.md §6 的验收不变量（生成器回归时第一时间发现）。"""
+
+    def test_same_seed_is_identical(self) -> None:
+        a = WorldMap.generate(20240501)
+        b = WorldMap.generate(20240501)
+
+        def sig(wm):
+            return [(t.x, t.y, t.terrain, t.elevation, t.moisture,
+                     t.wind, t.solar, t.coal, t.uranium) for t in wm.iter_tiles()]
+
+        self.assertEqual(sig(a), sig(b))
+
+    def test_terrain_mix_and_candidates(self) -> None:
+        for seed in (99, 20240501):
+            wm = WorldMap.generate(seed)
+            tiles = list(wm.iter_tiles())
+            total = len(tiles)
+            coast = sum(1 for t in tiles if t.terrain is Terrain.COAST)
+            plain = sum(1 for t in tiles if t.terrain is Terrain.PLAIN)
+            self.assertTrue(0.08 <= coast / total <= 0.20, f"seed {seed} COAST {coast/total:.1%}")
+            self.assertGreaterEqual(plain / total, 0.35, f"seed {seed} PLAIN {plain/total:.1%}")
+            self.assertGreaterEqual(len(wm.city_candidates), 4)
+            for cand in wm.city_candidates:
+                x, y = cand["x"], cand["y"]
+                land = sum(1 for yy in range(y - 1, y + 2) for xx in range(x - 1, x + 2)
+                           if wm.in_bounds(xx, yy)
+                           and wm.tile(xx, yy).terrain in (Terrain.PLAIN, Terrain.DESERT))
+                self.assertGreaterEqual(land, 2, f"seed {seed} 城址 {x},{y} 3×3 内可建格不足")
+
+    def test_rivers_reach_sea_and_are_long(self) -> None:
+        wm = WorldMap.generate(20240501)
+        self.assertTrue(wm.rivers)
+        for path in wm.rivers:
+            self.assertGreaterEqual(len(path), 10)
+            x, y = path[-1]
+            touches = (x + 1 >= wm.w - 2
+                       or wm.tile(x + 1, y).terrain is Terrain.COAST
+                       or wm.tile(x, y).terrain is Terrain.COAST)
+            self.assertTrue(touches, f"河道终点 ({x},{y}) 没碰到海")
+
+    def test_no_tiny_isolated_region(self) -> None:
+        wm = WorldMap.generate(20240501)
+        seen = [[False] * wm.w for _ in range(wm.h)]
+        for ty in range(wm.h):
+            for tx in range(wm.w):
+                if seen[ty][tx] or wm.tile(tx, ty).terrain in (Terrain.RIVER, Terrain.COAST, Terrain.CITY):
+                    continue
+                kind = wm.tile(tx, ty).terrain
+                stack, seen[ty][tx], size = [(tx, ty)], True, 0
+                while stack:
+                    cx, cy = stack.pop()
+                    size += 1
+                    for nx, ny in wm.neighbors4(cx, cy):
+                        if not seen[ny][nx] and wm.tile(nx, ny).terrain is kind:
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+                self.assertGreaterEqual(size, 8, f"({tx},{ty}) 附近有 {size} 格的孤岛")
+
+    def test_resources_exist(self) -> None:
+        for seed in (99, 20240501):
+            wm = WorldMap.generate(seed)
+            self.assertEqual(len(wm.find_tiles("coal_mine")), 3, f"seed {seed} 煤矿数量")
+            self.assertGreaterEqual(len(wm.find_tiles("uranium_mine")), 1, f"seed {seed} 铀矿缺失")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

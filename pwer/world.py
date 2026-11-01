@@ -39,6 +39,11 @@ class Tile:
     owner: int = -1          # 占用地块的公司下标
     kind: str = ""           # 占用建筑类型键（电源 key / 设施 key）
     ref: int = -1            # 对应对象 id（plant.id / mine.id / project.id）
+    # 01_terrain 生成的四件"读数"，只影响能不能建 / 造价乘数 / 出力，不参与模拟
+    elevation: float = 0.0   # 0~1200 米
+    moisture: float = 0.5    # 0~1
+    highland: bool = False
+    water: bool = False      # 本格是不是水系（河流 / 近海）
 
     @property
     def occupied(self) -> bool:
@@ -47,6 +52,14 @@ class Tile:
     @property
     def buildable_land(self) -> bool:
         return self.terrain is not Terrain.CITY
+
+    def __setstate__(self, state: dict) -> None:
+        """兼容 01_terrain 之前的存档：缺的字段补默认值。"""
+        self.__dict__.update(state)
+        self.__dict__.setdefault("elevation", 0.0)
+        self.__dict__.setdefault("moisture", 0.5)
+        self.__dict__.setdefault("highland", False)
+        self.__dict__.setdefault("water", self.terrain in (Terrain.RIVER, Terrain.COAST))
 
 
 @dataclass
@@ -79,6 +92,10 @@ class WorldMap:
         self.h = h
         self.tiles: list[list[Tile]] = []
         self.cities: list[City] = []
+        # 01_terrain 的产物：候选城址 + 河道（存档里带一份，方便调试/复盘）
+        self.city_candidates: list[dict] = []
+        self.rivers: list[list[tuple[int, int]]] = []
+        self.terrain_seed: int = 0
 
     # ------------------------------------------------------------ 基础访问
     def in_bounds(self, x: int, y: int) -> bool:
@@ -119,81 +136,44 @@ class WorldMap:
     # ------------------------------------------------------------ 生成
     @classmethod
     def generate(cls, seed: int = 20240501) -> "WorldMap":
-        rng = random.Random(seed)
+        """按 `docs/01_terrain.md` 的契约生成地图：地形、矿、风光、城址全部来自 01。"""
+        from . import terrain as terrain_mod
+
         wm = cls()
         w, h = wm.w, wm.h
-        wm.tiles = [[Tile(x, y, Terrain.PLAIN) for x in range(w)] for y in range(h)]
+        tm = terrain_mod.generate(w, h, seed)
+        wm.terrain_seed = seed
+        wm.city_candidates = [dict(c) for c in tm.city_candidates]
+        wm.rivers = [list(path) for path in tm.rivers]
 
-        # 东侧近海
+        wm.tiles = []
         for y in range(h):
-            for x in range(w - 2, w):
-                wm.tiles[y][x].terrain = Terrain.COAST
-        # 右上方荒漠
-        for y in range(0, 5):
-            for x in range(12, w - 2):
-                wm.tiles[y][x].terrain = Terrain.DESERT
-        # 两片丘陵
-        for cx, cy, rad in ((3, 7, 2.4), (11, 10, 2.0), (13, 4, 1.6)):
-            for y in range(h):
-                for x in range(w):
-                    if math.hypot(x - cx, (y - cy) * 1.1) <= rad:
-                        if wm.tiles[y][x].terrain is Terrain.PLAIN:
-                            wm.tiles[y][x].terrain = Terrain.HILL
+            row: list[Tile] = []
+            for x in range(w):
+                c = tm.cell(x, y)
+                row.append(Tile(
+                    x, y, c.terrain,
+                    wind=c.wind, solar=c.solar, coal=c.coal, uranium=c.uranium,
+                    elevation=c.elevation, moisture=c.moisture, highland=c.highland,
+                    water=c.terrain in (Terrain.RIVER, Terrain.COAST),
+                ))
+            wm.tiles.append(row)
 
-        # 一条从内陆流向近海的河
-        x, y = 3, 1
-        while x < w - 2:
-            wm.tiles[y][x].terrain = Terrain.RIVER
-            if rng.random() < 0.45 and y > 1:
-                y -= 1
-                wm.tiles[y][x].terrain = Terrain.RIVER
-            elif rng.random() < 0.45 and y < h - 2:
-                y += 1
-                wm.tiles[y][x].terrain = Terrain.RIVER
-            x += 1
-            y = max(1, min(h - 2, y))
-
-        # 支流：从干流南下，流经钢城（给内陆工业城市留出冷却水与水电条件）
-        x, y = 7, 2
-        while y < h - 2:
-            wm.tiles[y][x].terrain = Terrain.RIVER
-            y += 1
-            if rng.random() < 0.28:
-                x = max(2, min(w - 2, x + rng.choice((-1, 1))))
-
-        # 四个城市（保证落在陆地平原上）
-        city_defs = [
-            ("临江", 4, 3, 300.0),
-            ("北岭", 9, 2, 420.0),
-            ("钢城", 6, 9, 560.0),
-            ("滨海", 12, 9, 700.0),
-        ]
-        for idx, (name, cx, cy, mw) in enumerate(city_defs):
+        # 城址：候选从大到小，越大的平原给越大的用电基数
+        names = (("临江", 700.0), ("北岭", 560.0), ("钢城", 420.0), ("滨海", 300.0))
+        for idx, (name, base_mw) in enumerate(names):
+            if idx >= len(wm.city_candidates):
+                break
+            cand = wm.city_candidates[idx]
+            cx, cy = int(cand["x"]), int(cand["y"])
             t = wm.tiles[cy][cx]
-            t.terrain = Terrain.PLAIN
-            t.wind = t.solar = 1.0
+            t.terrain = Terrain.CITY
+            t.water = False
             t.owner = -1
             t.kind = "city"
-            c = City(idx, name, cx, cy, mw)
-            c.demand_mw = mw
+            c = City(idx, name, cx, cy, base_mw)
+            c.demand_mw = base_mw
             wm.cities.append(c)
-
-        # 矿脉：煤靠西/南（近老工业），铀靠北/东
-        coal_spots = [(6, 5), (3, 8), (8, 10)]
-        uranium_spots = [(11, 3), (14, 6), (10, 11)]
-        for (mx, my) in coal_spots:
-            if wm.tiles[my][mx].kind in ("", "city") and wm.tiles[my][mx].kind != "city":
-                wm.tiles[my][mx].coal = MINE_RESERVE["coal_mine"] * (0.8 + 0.4 * rng.random())
-        for (mx, my) in uranium_spots:
-            if wm.tiles[my][mx].kind == "":
-                wm.tiles[my][mx].uranium = MINE_RESERVE["uranium_mine"] * (0.8 + 0.4 * rng.random())
-
-        # 风光系数
-        for t in wm.iter_tiles():
-            info = TERRAIN_INFO[t.terrain]
-            jitter = lambda: 0.82 + 0.42 * rng.random()  # noqa: E731
-            t.wind = round(info.wind * jitter(), 2)
-            t.solar = round(info.solar * jitter(), 2)
 
         for c in wm.cities:
             c.refresh_split(0.42)

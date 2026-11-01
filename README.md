@@ -119,7 +119,8 @@ SHA-256 说明情况。
 main.py                  启动入口
 pwer/
   constants.py           全部可调数值（单位约定：万元 / MW / MWh / 元每 MWh）
-  world.py               地形、地块、矿产资源、建造权限与造价
+  terrain.py             地形生成：控制点→最陡下降成河→IDW→平滑→分级→资源→城址候选
+  world.py               地块容器、矿产资源、建造权限与造价（吃 terrain 的产物）
   company.py             公司、电厂、矿、在建工程、利润表
   grid.py                电网连通、城市可交付容量、线损
   dispatch.py            需求分流、机组调度、燃料与限电
@@ -128,6 +129,8 @@ pwer/
   policy.py              碳税 / 新能源配额 / 电价上限 / 反垄断
   events.py              15 种随机事件
   ai.py                  对手 AI（建厂、报价、抄底、反收购）
+  config/
+    terrain_config.json   地形生成参数（删掉即用 pwer/terrain.py 的 DEFAULTS）
   engine.py              回合编排、财务结算、胜负判定
   ui/
     start.py             启动页：菜单 / 标题块 / 设置面板 / 状态灯（国际主义版式）
@@ -154,7 +157,7 @@ docs/                    设计契约（数据契约），见下一节
 | 契约 | 覆盖 | 状态 |
 |---|---|---|
 | [00 主设计](docs/00_overview.md) | 术语、六阶段↔`end_turn` 流水线、系统索引、UI、配置清单、12 条冲突裁决、避坑清单 | 契约 v1.0 |
-| [01 地形生成](docs/01_terrain.md) | 控制点→最陡下降→IDW→平滑→分级→连通域校验→资源绑定 | 契约 v1.0（现状手搓） |
+| [01 地形生成](docs/01_terrain.md) | 控制点→最陡下降→IDW→平滑→分级→连通域校验→资源绑定 | **已实现**（`pwer/terrain.py`） |
 | [02 城市](docs/02_city.md) | 区块模型、选址硬边界、扩张意愿四档、两层扩张、三级衰退 | 契约 v1.0（现状单格） |
 | [03 研发](docs/03_research.md) | 概率公式与硬上限、8 个项目数值、5 态状态机、人力双配额、AI 同规则、收购继承 | 契约 v1.0（未实现） |
 | [04 合同·应急·信誉](docs/04_contract_emergency_trust.md) | 4 类合同、履约判定、灾害响应、隐藏信誉与口碑耦合 | 契约 v1.0（未实现） |
