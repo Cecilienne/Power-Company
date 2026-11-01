@@ -19,7 +19,7 @@ from ..constants import (
     UI_BG,
     UI_DIM,
 )
-from ..world import CITY_RADIUS, Terrain
+from ..world import CITY_RADIUS, GRID_H, GRID_W, Terrain
 
 TS = 36          # 每格像素（由 App 在初始化时按 DPI 改写）
 
@@ -34,7 +34,7 @@ class MapView(ttk.Frame):
         self.selected: Optional[tuple[int, int]] = None
         self.build_mode: Optional[str] = None
         self.valid_tiles: set[tuple[int, int]] = set()
-        self.canvas = tk.Canvas(self, width=18 * TS, height=12 * TS,
+        self.canvas = tk.Canvas(self, width=GRID_W * TS, height=GRID_H * TS,
                                 bg=UI_BG, highlightthickness=0)
         self.canvas.pack(padx=4, pady=4)
         self.canvas.bind("<Button-1>", self._click)

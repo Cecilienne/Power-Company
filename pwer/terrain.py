@@ -30,7 +30,7 @@ CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "terrain_config.j
 # 契约 §4 的配置字段（默认值即契约默认值）
 DEFAULTS: dict = {
     "width": 18,
-    "height": 12,
+    "height": 18,
     "control_points": (6, 9),
     "idw_power": 2.0,
     "idw_neighbors": 8,
@@ -375,7 +375,7 @@ def _reclassify_small(terrain, w, h, cfg: dict) -> None:
 
 
 # ---------------------------------------------------------------- 主入口
-def generate(width: int = 18, height: int = 12, seed: int = 20240501, **overrides) -> TerrainMap:
+def generate(width: int = 18, height: int = 18, seed: int = 20240501, **overrides) -> TerrainMap:
     """按契约生成一张地形图；同 seed 逐格一致。"""
     cfg = load_config(overrides.pop("config_path", None))
     cfg.update(overrides)

@@ -12,7 +12,7 @@ import os
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from .. import audio, ma, paths
+from .. import audio, ma, paths, world
 from ..company import Company
 from ..constants import (
     ANTITRUST_SHARE,
@@ -684,8 +684,8 @@ class App(tk.Tk):
         h = self.stage.winfo_height() - scale.px(34)
         if w < 80 or h < 80:
             return
-        ts = int(min(w / 18, h / 12))
-        ts = max(scale.px(18), min(ts, scale.px(64)))
+        ts = int(min(w / world.GRID_W, h / world.GRID_H))
+        ts = max(scale.px(18), min(ts, scale.px(world.TILE_PX)))
         if ts != mapview.TS:
             self.map.set_tile(ts)
 

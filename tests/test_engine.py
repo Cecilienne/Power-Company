@@ -412,15 +412,49 @@ class TestTerrain(unittest.TestCase):
                 self.assertGreaterEqual(land, 2, f"seed {seed} 城址 {x},{y} 3×3 内可建格不足")
 
     def test_rivers_reach_sea_and_are_long(self) -> None:
+        """每条河要么自己入海，要么汇进的河入了海（水网整体连通到海）。"""
         wm = WorldMap.generate(20240501)
         self.assertTrue(wm.rivers)
-        for path in wm.rivers:
-            self.assertGreaterEqual(len(path), 10)
-            x, y = path[-1]
-            touches = (x + 1 >= wm.w - 2
-                       or wm.tile(x + 1, y).terrain is Terrain.COAST
-                       or wm.tile(x, y).terrain is Terrain.COAST)
-            self.assertTrue(touches, f"河道终点 ({x},{y}) 没碰到海")
+        paths = [[(x, y) for x, y in p] for p in wm.rivers]
+        for i, path in enumerate(paths):
+            self.assertGreaterEqual(len(path), 10, f"第 {i} 条河只有 {len(path)} 格")
+
+        def neighbours(x: int, y: int):
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if dx or dy:
+                        nx, ny = x + dx, y + dy
+                        if wm.in_bounds(nx, ny):
+                            yield nx, ny
+
+        # 河道之间用"隔壁就是另一条河"认连通，再从任一入海口回溯整片水网
+        links: dict[int, set[int]] = {i: set() for i in range(len(paths))}
+        for i, path in enumerate(paths):
+            for x, y in path:
+                for nx, ny in neighbours(x, y):
+                    for j, other in enumerate(paths):
+                        if j != i and (nx, ny) in other:
+                            links[i].add(j)
+                            links[j].add(i)
+
+        def touches_sea(i: int) -> bool:
+            for x, y in paths[i]:
+                for nx, ny in neighbours(x, y):
+                    if wm.tile(nx, ny).terrain is Terrain.COAST:
+                        return True
+            return False
+
+        for i in range(len(paths)):
+            seen, stack, ok = {i}, [i], False
+            while stack:
+                cur = stack.pop()
+                if touches_sea(cur):
+                    ok = True
+                    break
+                for j in links[cur] - seen:
+                    seen.add(j)
+                    stack.append(j)
+            self.assertTrue(ok, f"第 {i} 条河（{len(paths[i])} 格）连不到海")
 
     def test_no_tiny_isolated_region(self) -> None:
         wm = WorldMap.generate(20240501)
