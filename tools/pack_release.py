@@ -15,6 +15,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -43,14 +44,24 @@ def read_const(name: str, default: str = "") -> str:
 
 
 def git(*args: str) -> str:
+    """跑一条 git 命令拿 stdout。
+
+    故意用临时文件而不是管道收输出：某些受限环境（沙箱、部分企业策略）会拒绝
+    `CreatePipe`，`capture_output=True` 直接抛 WinError 5，那样 MANIFEST 里的
+    git 提交号就会莫名其妙变成空字符串。
+    """
     try:
-        out = subprocess.run(
-            ["git", *args], cwd=ROOT, capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=20,
-        )
+        with tempfile.TemporaryFile() as out:
+            rc = subprocess.run(
+                ["git", *args], cwd=ROOT, stdout=out,
+                stderr=subprocess.DEVNULL, timeout=20,
+            ).returncode
+            if rc != 0:
+                return ""
+            out.seek(0)
+            return out.read().decode("utf-8", "replace").strip()
     except (OSError, subprocess.SubprocessError):
         return ""
-    return out.stdout.strip() if out.returncode == 0 else ""
 
 
 def sha256(path: Path) -> str:
