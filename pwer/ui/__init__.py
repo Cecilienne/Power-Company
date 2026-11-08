@@ -18,8 +18,7 @@ def _icon_candidates(name: str):
 def set_window_icon(win) -> None:
     """给窗口装应用图标。
 
-    `assets/app.ico` 是 `tools/make_icon.py` 生成的（不入库），打包后可能不存在，
-    所以全部失败都静默跳过——图标缺失不该让游戏起不来。
+    `assets/app.ico` 是可选资源，不存在时全部静默跳过——图标缺失不该让游戏起不来。
     """
     for ico in _icon_candidates("app.ico"):
         if not ico.exists():

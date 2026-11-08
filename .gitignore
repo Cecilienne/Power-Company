@@ -9,19 +9,8 @@ venv/
 saves/
 *.log
 
-# ---- 生成物：图标与截图不入库（纯代码仓库）----
+# ---- 可选运行时资源（图标、音乐等由玩家自备）----
 assets/
-docs/screenshots/
-
-# ---- 打包产物与大文件（exe 用 GitHub Releases 发，不要进仓库）----
-build/
-dist/
-release/
-build_tools/
-wheelhouse/
-*.spec
-.buildtmp/
-tmpbuild/
 
 # ---- 编辑器 / 系统 ----
 .vscode/
@@ -29,17 +18,3 @@ tmpbuild/
 Thumbs.db
 desktop.ini
 .DS_Store
-
-# ---- 其他 ----
-
-# ---- 工具 ----
-# 只忽略 tools/ 里的临时脚本；参与打包发行的工具必须入库，否则 CI 里没有它们
-tools/*
-!tools/fetch_pyinstaller.py
-!tools/make_icon.py
-!tools/make_notice.py
-!tools/make_version_file.py
-!tools/pack_release.py
-
-# ---- 素材原件（已复制到 assets/bgm/，原件不入库）----
-566818365-*.mp4

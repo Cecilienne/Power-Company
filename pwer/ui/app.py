@@ -27,6 +27,7 @@ from ..constants import (
     UI_BAD,
     UI_BG,
     UI_BLUE,
+    UI_BLUE_HI,
     UI_DIM,
     UI_DIM2,
     UI_GOOD,
@@ -38,7 +39,6 @@ from ..constants import (
     UI_SEL,
     UI_TEXT,
     UI_WARN,
-    UI_YELLOW,
     money,
 )
 from ..engine import Game
@@ -284,9 +284,9 @@ class App(tk.Tk):
         st.configure("TButton", background=UI_PANEL2, foreground=UI_TEXT,
                      padding=(scale.px(8), scale.px(4)))
         st.map("TButton", background=[("active", UI_HOVER)])
-        st.configure("Accent.TButton", background=UI_RED, foreground="white",
+        st.configure("Accent.TButton", background=UI_BLUE, foreground=UI_TEXT,
                      padding=(scale.px(12), scale.px(7)), font=(FONT, 11, "bold"))
-        st.map("Accent.TButton", background=[("active", UI_RED)])
+        st.map("Accent.TButton", background=[("active", UI_BLUE_HI)])
         st.configure("Small.TButton", padding=(scale.px(4), scale.px(2)), font=(FONT, 8))
         st.configure("TLabel", background=UI_PANEL, foreground=UI_TEXT)
         st.configure("TSpinbox", fieldbackground=BG2, foreground=UI_TEXT,
@@ -297,7 +297,7 @@ class App(tk.Tk):
                      troughcolor=UI_BG, bordercolor=UI_BG, arrowcolor=UI_DIM,
                      arrowsize=scale.px(9), relief="flat", borderwidth=0)
         st.map("Dark.Vertical.TScrollbar",
-               background=[("active", UI_RED), ("pressed", UI_RED)])
+               background=[("active", UI_BLUE), ("pressed", UI_BLUE_HI)])
         st.configure("Dark.TSpinbox", fieldbackground=UI_PANEL2,
                      background=UI_PANEL2, foreground=UI_TEXT, insertcolor=UI_TEXT,
                      arrowcolor=UI_DIM, bordercolor=UI_RULE,
@@ -371,7 +371,7 @@ class App(tk.Tk):
         rail = tk.Frame(parent, bg=UI_BG, width=P(116))
         rail.pack(side="left", fill="y")
         rail.pack_propagate(False)
-        tk.Frame(rail, bg=UI_YELLOW, width=P(3)).pack(side="left", fill="y")
+        tk.Frame(rail, bg=UI_BLUE, width=P(3)).pack(side="left", fill="y")
         inner = tk.Frame(rail, bg=UI_BG)
         inner.pack(side="left", fill="both", expand=True, padx=(P(8), P(6)), pady=P(10))
 
@@ -392,7 +392,7 @@ class App(tk.Tk):
                       bd=0, relief="flat", font=(FONT, 9), anchor="w",
                       padx=P(8), pady=P(5), cursor="hand2").pack(fill="x", pady=P(2))
         tk.Button(inner, text="退出", command=self.destroy, bg=UI_RED, fg=UI_TEXT,
-                  activebackground="#FF3B30", activeforeground=UI_TEXT,
+                  activebackground=UI_RED, activeforeground=UI_TEXT,
                   bd=0, relief="flat", font=(FONT, 9, "bold"), anchor="w",
                   padx=P(8), pady=P(5), cursor="hand2").pack(fill="x", pady=(P(10), P(2)))
 
@@ -418,12 +418,12 @@ class App(tk.Tk):
     def _sync_rail(self) -> None:
         for key, it in self.rail_items.items():
             on = (self.panel == key)
-            bg = UI_RED if on else UI_PANEL2
+            bg = UI_BLUE if on else UI_PANEL2
             it["box"].config(bg=bg)
             it["txt"].config(bg=bg)
             it["zh"].config(bg=bg, fg=UI_TEXT)
-            it["en"].config(bg=bg, fg="#F6D9D6" if on else UI_DIM)
-            it["bar"].config(bg=UI_YELLOW if on else UI_BG)
+            it["en"].config(bg=bg, fg=UI_ACCENT if on else UI_DIM)
+            it["bar"].config(bg=UI_ACCENT if on else UI_BG)
 
     # ------------------------------------------------------------ 中间：地图 + 抽屉
     def _build_stage(self, parent) -> None:
@@ -547,7 +547,7 @@ class App(tk.Tk):
         P = scale.px
         head = tk.Frame(root, bg=UI_PANEL)
         head.pack(fill="x", padx=P(8), pady=(P(6), P(2)))
-        self.lbl_music_now = tk.Label(head, text="", bg=UI_PANEL, fg=UI_YELLOW,
+        self.lbl_music_now = tk.Label(head, text="", bg=UI_PANEL, fg=UI_ACCENT,
                                       font=(FONT, 10, "bold"), anchor="w")
         self.lbl_music_now.pack(fill="x")
         self.lbl_music_hint = tk.Label(head, text="", bg=UI_PANEL, fg=UI_DIM,
@@ -577,7 +577,7 @@ class App(tk.Tk):
         self._music_key = (cur, len(tracks))
         if 0 <= cur < len(tracks):
             self.lbl_music_now.config(text=f"正在播放  {cur + 1:02d} · {tracks[cur].name}",
-                                      fg=UI_YELLOW)
+                                      fg=UI_ACCENT)
         else:
             self.lbl_music_now.config(text="未播放", fg=UI_DIM2)
         self.lbl_music_hint.config(
@@ -592,18 +592,18 @@ class App(tk.Tk):
 
         for i, t in enumerate(tracks):
             on = (i == cur)
-            bg = UI_RED if on else UI_PANEL2
+            bg = UI_BLUE if on else UI_PANEL2
             fg = UI_TEXT
             row = tk.Frame(self.music_list, bg=bg, cursor="hand2")
             row.pack(fill="x", pady=P(3))
             kids = []
-            idx = tk.Label(row, text=f"{i + 1:02d}", bg=bg, fg=("#F6D9D6" if on else UI_DIM2),
+            idx = tk.Label(row, text=f"{i + 1:02d}", bg=bg, fg=(UI_ACCENT if on else UI_DIM2),
                            font=(FONT, 8), width=3, anchor="w")
             idx.pack(side="left", padx=(P(4), 0))
             name = tk.Label(row, text=t.name, bg=bg, fg=fg, font=(FONT, 9),
                             anchor="w", justify="left")
             name.pack(side="left", fill="x", expand=True, padx=P(4))
-            src = tk.Label(row, text=t.source, bg=bg, fg=("#F6D9D6" if on else UI_DIM),
+            src = tk.Label(row, text=t.source, bg=bg, fg=(UI_ACCENT if on else UI_DIM),
                            font=(FONT, 7), width=4)
             src.pack(side="left")
             mark = tk.Label(row, text="▶" if on else "  ", bg=bg,
@@ -858,7 +858,7 @@ class App(tk.Tk):
         self.tv_fin.column("item", width=P(240), anchor="w")
         self.tv_fin.column("val", width=P(150), anchor="e")
         self.tv_fin.pack(fill="both", expand=True, padx=P(8))
-        self.tv_fin.tag_configure("cost", foreground="#d99a9a")
+        self.tv_fin.tag_configure("cost", foreground=UI_RED)
         self.tv_fin.tag_configure("sum", foreground=UI_TEXT, background=UI_PANEL2)
         self.tv_fin.tag_configure("profit", foreground=UI_GOOD)
 
@@ -1067,13 +1067,13 @@ class App(tk.Tk):
         P = scale.px
         bar = tk.Frame(self, bg=UI_BG)
         bar.pack(fill="x", side="bottom")
-        tk.Frame(bar, bg=UI_RED, height=P(3)).pack(side="top", fill="x")
+        tk.Frame(bar, bg=UI_BLUE, height=P(3)).pack(side="top", fill="x")
         inner = tk.Frame(bar, bg=UI_BG)
         inner.pack(fill="x", padx=P(10), pady=P(5))
 
         left = tk.Frame(inner, bg=UI_BG)
         left.pack(side="left")
-        tk.Label(left, text="建造", bg=UI_BG, fg="#e8b4b0",
+        tk.Label(left, text="建造", bg=UI_BG, fg=UI_ACCENT,
                  font=(FONT, 9, "bold")).grid(row=0, column=0, sticky="w", padx=(0, P(4)))
         self.build_buttons: dict[str, ttk.Button] = {}
         items = [(k, PLANT_SPECS[k]) for k in PLANT_SPECS] + \

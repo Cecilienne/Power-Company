@@ -15,12 +15,21 @@ from typing import Callable, Optional
 from ..constants import (
     COMPANY_COLORS,
     INFRA_SPECS,
+    MAP_BUILD,
+    MAP_GRID,
+    MAP_MOUNTAIN,
+    MAP_SELECT,
+    MAP_WATER,
     PLANT_SPECS,
     TERRAIN_INFO,
     UI_BG,
     UI_DIM,
+    UI_GOOD,
+    UI_RED,
+    UI_TEXT,
+    UI_YELLOW,
 )
-from ..world import (CITY_RADIUS, CITY_TERRAIN_IDX, GRID_H, GRID_W,
+from ..world import (CITY_RADIUS, GRID_H, GRID_W,
                      TERRAIN_ORDER, Terrain)
 
 TS = 6           # 当前每格像素（随缩放变化，见 _set_ts）
@@ -59,8 +68,6 @@ class MapView(ttk.Frame):
         self._pan_from: Optional[tuple[int, int]] = None
         self._redraw_job: Optional[str] = None
         self._drawn: Optional[tuple[int, int, int, int]] = None
-        self._shades: Optional[list[tuple[str, str, str]]] = None
-        self._shade_key: tuple = ()
 
         self._busy = False
         self.canvas = tk.Canvas(self, bg=UI_BG, highlightthickness=0, bd=0)
@@ -324,18 +331,15 @@ class MapView(ttk.Frame):
         return (max(0, int((x0 - mx) // ts)), max(0, int((y0 - my) // ts)),
                 int((x0 + vw + mx) // ts), int((y0 + vh + my) // ts))
 
-    def _shade_table(self) -> list[tuple[str, str, str]]:
-        """每种地形按高程分三档，给底图上一点起伏感（同色块太板）。"""
-        key = tuple(TERRAIN_ORDER)
-        if getattr(self, "_shades", None) is not None and self._shade_key == key:
-            return self._shades
-        table = []
-        for t in TERRAIN_ORDER:
-            base = TERRAIN_INFO[t].color
-            table.append(tuple(_shade(base, f) for f in (0.87, 0.95, 1.03, 1.11)))
-        self._shades = table
-        self._shade_key = key
-        return table
+    @staticmethod
+    def _terrain_fill(ti: int) -> str:
+        """单一主题：只分三类——山地砖红、水域深蓝、其余黑底可建。"""
+        t = TERRAIN_ORDER[ti]
+        if t is Terrain.HILL:
+            return MAP_MOUNTAIN
+        if t in (Terrain.RIVER, Terrain.COAST):
+            return MAP_WATER
+        return MAP_BUILD
 
     def _lod_block(self) -> int:
         """格子太小时把 block×block 归成一个色块。
@@ -370,12 +374,10 @@ class MapView(ttk.Frame):
         self._drawn = (xa, ya, xb, yb)
         block = self._lod_block()
 
-        # 1) 地形底图（LOD 聚合）
-        shades = self._shade_table()
+        # 1) 地形底图（LOD 聚合）：山地红、水域蓝、其余黑底=可建
         terr = w.terr
-        elev = w.elev
         # 网格线平时不画（整片格子像坐标纸）；只有建造模式才显示，方便对准格点
-        outline = "#2b2f36" if (self.build_mode and block == 1 and ts >= 6) else ""
+        outline = MAP_GRID if (self.build_mode and block == 1 and ts >= 6) else ""
         span = ts * block
         half = block // 2
         # 同一行里颜色相同的相邻块合成一个矩形：整片平原/海面只占几个 item。
@@ -388,11 +390,7 @@ class MapView(ttk.Frame):
             for bx in range(xa, xb + 1, block):
                 sx = min(W - 1, bx + half)
                 ti = terr[sy * W + sx]
-                if ti == CITY_TERRAIN_IDX:
-                    fill = "#8f7f6d"
-                else:
-                    name = TERRAIN_ORDER[ti].value
-                    fill = shades[ti][_elev_bucket(elev[sy * W + sx], name)]
+                fill = self._terrain_fill(ti)
                 if merge:
                     if fill == run_fill:
                         continue
@@ -410,6 +408,19 @@ class MapView(ttk.Frame):
                 end = (xb + block) * ts
                 c.create_rectangle(run_x * ts, by * ts, end, by * ts + span,
                                    fill=run_fill, outline="")
+
+        # 1b) 可建区点阵：黑底上给一点纸面纹理，和 Mini Motorways 的空地一样
+        if block == 1 and ts >= 10:
+            r = 1.15 if ts >= 18 else 0.9
+            for yy in range(ya, yb + 1):
+                row = yy * W
+                py = yy * ts + ts * 0.5
+                for xx in range(xa, xb + 1):
+                    if self._terrain_fill(terr[row + xx]) != MAP_BUILD:
+                        continue
+                    px = xx * ts + ts * 0.5
+                    c.create_oval(px - r, py - r, px + r, py + r,
+                                  fill=MAP_GRID, outline="")
 
         # 2) 线路（在所有地块之上、建筑之下）
         for owner, x, y in w.all_owned():
@@ -430,10 +441,14 @@ class MapView(ttk.Frame):
 
         # 3) 城市：缩到全图时也要能看见，所以先画一个标记点
         for city in w.cities:
+            if not (xa - 1 <= city.x <= xb + 1 and ya - 1 <= city.y <= yb + 1):
+                continue
             cx, cy = city.x * ts + ts / 2, city.y * ts + ts / 2
             r = max(4.0, ts * 0.55)
             c.create_rectangle(cx - r, cy - r, cx + r, cy + r,
-                               fill="#f4f2ec", outline="#8f7f6d", width=1)
+                               fill=UI_TEXT, outline=MAP_WATER, width=1)
+            if ts >= 9:
+                self._draw_occupant(game, w.tile(city.x, city.y))
         # 3b) 城市服务圈（变电站必须落在这个圈里）
         for city in w.cities:
             if not (xa - CITY_RADIUS - 1 <= city.x <= xb + CITY_RADIUS + 1
@@ -442,7 +457,7 @@ class MapView(ttk.Frame):
             c.create_rectangle((city.x - CITY_RADIUS) * ts + 2, (city.y - CITY_RADIUS) * ts + 2,
                                (city.x + CITY_RADIUS + 1) * ts - 2,
                                (city.y + CITY_RADIUS + 1) * ts - 2,
-                               outline="#ffd479", width=1, dash=(4, 3))
+                               outline=MAP_SELECT, width=1, dash=(4, 3))
 
         # 4) 建筑 / 资源点：稀疏遍历（有主的格子只有几十个、矿点只有几个），
         #    别按可视矩形逐格扫——整图缩放时那是十几万次循环
@@ -456,14 +471,14 @@ class MapView(ttk.Frame):
                 r = max(1.5, ts * 0.09)
                 c.create_oval(x0 + ts * 0.18 - r, y0 + ts * 0.82 - r,
                               x0 + ts * 0.18 + r, y0 + ts * 0.82 + r,
-                              fill="#1e1e1e", outline="#000")
+                              fill="#5A4C40", outline="#000")
         for sx, sy in w.uranium_spots:
             if xa <= sx <= xb and ya <= sy <= yb and uranium[sy * W + sx] > 0:
                 x0, y0 = sx * ts, sy * ts
                 r = max(1.5, ts * 0.09)
                 c.create_oval(x0 + ts * 0.82 - r, y0 + ts * 0.82 - r,
                               x0 + ts * 0.82 + r, y0 + ts * 0.82 + r,
-                              fill="#3fae5a", outline="#000")
+                              fill=UI_GOOD, outline="#000")
 
         # 5) 建造模式：可见范围内把不可建的格子压暗
         if self.build_mode and self.valid_tiles:
@@ -479,12 +494,12 @@ class MapView(ttk.Frame):
                         continue
                     c.create_rectangle(bx * ts, by * ts,
                                        bx * ts + span_d, by * ts + span_d,
-                                       fill="#0c0e12", outline="", stipple="gray12")
+                                       fill="#05070A", outline="", stipple="gray12")
 
         if self.selected:
             x, y = self.selected
             c.create_rectangle(x * ts, y * ts, x * ts + ts, y * ts + ts,
-                               outline="#ffffff", width=2)
+                               outline=MAP_SELECT, width=2)
         self._sync_scrollregion()
 
     def _cc(self, idx: int) -> str:
@@ -498,13 +513,13 @@ class MapView(ttk.Frame):
         if ts < 9:
             # 缩到全图时格子只有几像素，图标文字只会糊成一片：只留一个色点
             if t.kind == "city":
-                col = "#f4f2ec"
+                col = UI_TEXT
             elif t.kind == "line":
                 col = COMPANY_COLORS[(t.owner or 0) % len(COMPANY_COLORS)]
             elif t.owner is not None and t.owner >= 0:
                 col = COMPANY_COLORS[t.owner % len(COMPANY_COLORS)]
             else:
-                col = "#d8d2c4"
+                col = "#D8D5CB"
             r = max(1.2, ts * 0.35)
             c.create_oval(cx - r, cy - r, cx + r, cy + r, fill=col, outline="")
             return
@@ -512,22 +527,30 @@ class MapView(ttk.Frame):
             city = game.world.city_at(t.x, t.y)
             bw = ts * 0.26
             c.create_rectangle(cx - bw * 1.4, cy - bw * 0.9, cx - bw * 0.1, cy + bw * 1.1,
-                               fill="#d8d2c4", outline="#5a5246")
+                               fill="#D8D5CB", outline=MAP_WATER)
             c.create_rectangle(cx - bw * 0.3, cy - bw * 1.5, cx + bw * 0.7, cy + bw * 1.1,
-                               fill="#c9c2b2", outline="#5a5246")
+                               fill="#C9C5BA", outline=MAP_WATER)
             c.create_rectangle(cx + bw * 0.9, cy - bw * 0.6, cx + bw * 1.9, cy + bw * 1.1,
-                               fill="#d8d2c4", outline="#5a5246")
-            if city and ts >= 10:
-                c.create_text(cx, y0 + ts * 0.80, text=f"{city.name} {city.demand_mw:.0f}MW",
-                              fill="#ffffff",
-                              font=("Microsoft YaHei UI", -max(7, int(ts * 0.19)), "bold"))
+                               fill="#D8D5CB", outline=MAP_WATER)
+            if city and ts >= 9:
+                # 城市名放在地块下方，避免压住楼体；黑底胶囊保证在任何地形上都读得清
+                fs = max(10, int(ts * 0.22))
+                pill_w = max(ts * 1.9, 64)
+                py0 = y0 + ts * 1.07
+                py1 = y0 + ts * 1.42
+                c.create_rectangle(cx - pill_w / 2, py0, cx + pill_w / 2, py1,
+                                   fill=UI_BG, outline=MAP_GRID)
+                c.create_text(cx, (py0 + py1) / 2,
+                              text=f"{city.name} {city.demand_mw:.0f}MW",
+                              fill=UI_TEXT,
+                              font=("Microsoft YaHei UI", -fs, "bold"))
                 # 市场份额条：谁在给这座城市供电
                 bx = x0 + ts * 0.08
                 bw = ts * 0.84
                 by = y0 + ts * 0.88
                 bh = max(2, ts * 0.07)
                 c.create_rectangle(bx, by, bx + bw, by + bh,
-                                   fill="#2a2a2a", outline="")
+                                   fill="#1D2836", outline="")
                 acc = 0.0
                 for cid in sorted(city.share):
                     frac = city.share[cid]
@@ -547,7 +570,7 @@ class MapView(ttk.Frame):
             c.create_rectangle(x0 + ts * 0.14, y0 + ts * 0.18,
                                x0 + ts * 0.86, y0 + ts * 0.68,
                                fill=spec.color, outline=color, width=2)
-            c.create_text(cx, y0 + ts * 0.43, text=spec.short, fill="#ffffff",
+            c.create_text(cx, y0 + ts * 0.43, text=spec.short, fill=UI_TEXT,
                           font=("Microsoft YaHei UI", -int(ts * 0.30), "bold"))
             plant = None
             if t.owner >= 0:
@@ -556,16 +579,16 @@ class MapView(ttk.Frame):
             if plant is not None:
                 c.create_rectangle(x0 + ts * 0.14, y0 + ts * 0.76,
                                    x0 + ts * 0.86, y0 + ts * 0.90,
-                                   fill="#333333", outline="")
+                                   fill="#1D2836", outline="")
                 cfw = (ts * 0.72) * max(0.0, min(1.0, plant.cf_actual))
                 c.create_rectangle(x0 + ts * 0.14, y0 + ts * 0.76,
                                    x0 + ts * 0.14 + cfw, y0 + ts * 0.90,
-                                   fill="#57c785" if plant.online else "#e0605e", outline="")
+                                   fill=UI_GOOD if plant.online else UI_RED, outline="")
         elif t.kind in ("coal_mine", "uranium_mine"):
             r = ts * 0.30
             c.create_oval(cx - r, cy - r, cx + r, cy + r,
-                          fill="#2a2a2a", outline=color, width=2)
-            c.create_text(cx, cy, text=INFRA_SPECS[t.kind].short, fill="#f0e6c8",
+                          fill="#1A222B", outline=color, width=2)
+            c.create_text(cx, cy, text=INFRA_SPECS[t.kind].short, fill="#D8D5CB",
                           font=("Microsoft YaHei UI", -int(ts * 0.26), "bold"))
             mine = None
             if t.owner >= 0:
@@ -574,58 +597,25 @@ class MapView(ttk.Frame):
             if mine:
                 pct = min(1.0, mine.reserve / max(1.0, mine.output * 60))
                 c.create_rectangle(x0 + ts * 0.20, y0 + ts * 0.86,
-                                   x0 + ts * 0.80, y0 + ts * 0.94, fill="#333333", outline="")
+                                   x0 + ts * 0.80, y0 + ts * 0.94, fill="#1D2836", outline="")
                 c.create_rectangle(x0 + ts * 0.20, y0 + ts * 0.86,
                                    x0 + ts * 0.20 + ts * 0.60 * pct, y0 + ts * 0.94,
-                                   fill="#c9a227", outline="")
+                                   fill=UI_YELLOW, outline="")
         elif t.kind == "substation":
             c.create_polygon(cx, cy - ts * 0.34, cx + ts * 0.32, cy,
                              cx, cy + ts * 0.34, cx - ts * 0.32, cy,
-                             fill="#f2ecd8", outline=color, width=2)
-            c.create_text(cx, cy, text="变", fill="#3b3b3b",
+                             fill="#D8D5CB", outline=color, width=2)
+            c.create_text(cx, cy, text="变", fill="#1A222B",
                           font=("Microsoft YaHei UI", -int(ts * 0.22), "bold"))
         if t.ref < 0 and t.owner >= 0:
             c.create_rectangle(x0 + ts * 0.10, y0 + ts * 0.10,
                                x0 + ts * 0.90, y0 + ts * 0.90,
-                               outline="#e5b454", width=2, dash=(3, 2))
+                               outline=UI_YELLOW, width=2, dash=(3, 2))
             pr = next((p for p in game.companies[t.owner].projects
                        if p.x == t.x and p.y == t.y), None)
             if pr:
-                c.create_text(cx, y0 + ts * 0.30, text=f"建{pr.turns_left}", fill="#ffd479",
+                c.create_text(cx, y0 + ts * 0.30, text=f"建{pr.turns_left}", fill=UI_YELLOW,
                               font=("Microsoft YaHei UI", -int(ts * 0.20), "bold"))
-
-
-# 每种地形自己的高程带（和 terrain.py 的阈值对齐），带内再分四档：
-# 平原整片 0~480m 如果只按全图 0~1200 分档，会全部落在同一档 → 看起来一块死绿。
-_BAND = {
-    "PLAIN": (0.0, 480.0),
-    "DESERT": (0.0, 660.0),
-    "HILL": (420.0, 1200.0),
-    "RIVER": (0.0, 1.0),
-    "COAST": (0.0, 1.0),
-    "CITY": (0.0, 1.0),
-}
-
-
-def _elev_bucket(e: float, terrain_name: str = "PLAIN") -> int:
-    """按该地形的高程带取 0..3 档，给底图配四档色。"""
-    lo, hi = _BAND.get(terrain_name, (0.0, 1200.0))
-    if hi <= lo:
-        return 1
-    n = (e - lo) / (hi - lo)
-    return 0 if n < 0.25 else (1 if n < 0.5 else (2 if n < 0.75 else 3))
-
-
-def _shade(color: str, factor: float) -> str:
-    """把 #rrggbb 乘个系数：>1 提亮、<1 压深（夹在 0..255）。"""
-    r = int(color[1:3], 16)
-    g = int(color[3:5], 16)
-    b = int(color[5:7], 16)
-
-    def f(v: int) -> int:
-        return max(0, min(255, int(round(v * factor))))
-
-    return f"#{f(r):02x}{f(g):02x}{f(b):02x}"
 
 
 def tile_tooltip(game, x: int, y: int) -> str:

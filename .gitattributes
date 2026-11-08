@@ -1,13 +1,8 @@
-# 统一换行符：源码/文档存 LF，Windows 批处理强制 CRLF
-* text=auto eol=lf
+# 统一换行符：源码存 LF
 
-*.bat text eol=crlf
-*.cmd text eol=crlf
-*.ps1 text eol=crlf
+* text=auto eol=lf
 
 # 二进制资源不做换行转换
 *.png binary
 *.ico binary
 *.pkl binary
-*.exe binary
-*.zip binary

@@ -1,6 +1,6 @@
 """主菜单 / 开始页 —— 国际主义（瑞士）风格。
 
-版式规格见 `docs/ui_start_screen.md`：所有坐标是 1920×1080 设计稿单位，
+所有坐标是 1920×1080 设计稿单位，
 运行时按 `min(w/1920, h/1080)` 等比缩放并居中，多出来的部分留黑边（不是拉伸）。
 
 四块功能区对应设计稿的四个色块：
@@ -24,12 +24,17 @@ from ..constants import (
     BUILD,
     MAX_TURNS,
     MULTIPLAYER_READY,
+    UI_START_ACCENT,
     UI_START_BG,
     UI_START_BLUE,
+    UI_START_BLUE_HI,
     UI_START_DIM1,
     UI_START_DIM2,
     UI_START_GREEN,
     UI_START_INK,
+    UI_START_PANEL,
+    UI_START_PANEL2,
+    UI_START_PANEL_RULE,
     UI_START_RED,
     UI_START_RULE,
     UI_START_YELLOW,
@@ -274,7 +279,7 @@ class StartScreen(tk.Frame):
         self._draw_quit()
 
     def _draw_menu_label(self) -> None:
-        self._rect(MENU_X, 92, 10, 10, UI_START_RED)
+        self._rect(MENU_X, 92, 10, 10, UI_START_BLUE)
         self._t(120, 84, "MENU / 001—004", 10, UI_START_DIM2, F_LAT, 2.6)
         self._line(MENU_X, 100, MENU_X + MENU_W, 100, UI_START_RULE)
 
@@ -293,12 +298,10 @@ class StartScreen(tk.Frame):
 
         self._t(712, 86, "电力公司", 118, UI_START_INK, F_BLACK, bold=_BLACK_IS_BOLD)
         self._t(720, 246, "POWER COMPANY", 24, UI_START_INK, F_LAT, 9.5)
-        self._t(720, 300, "POWER GRID & CAPITAL", 9, "#C9D2EA", F_LAT, 3.4)
+        self._t(720, 300, "POWER GRID & CAPITAL", 9, UI_START_ACCENT, F_LAT, 3.4)
 
-        self._line(1560, 96, 1560, 320, "#3A5AAB")
-        self._t(0, 104, "回合制经营", 11, "#DCE3F5", F_MED, 0, right=1784)
-        self._t(0, 124, "TURN-BASED STRATEGY", 8.5, "#AEBEE0", F_LAT, 2.4, right=1784)
-        self._t(0, 292, "2026", 17, UI_START_INK, F_LAT, 1.0, right=1784)
+        self._line(1560, 96, 1560, 320, UI_START_BLUE_HI)
+        self._t(0, 104, "经营类", 11, UI_START_INK, F_MED, 0, right=1784)
 
     def _draw_menu(self) -> None:
         for i, (key, num, zh, en) in enumerate(ITEMS):
@@ -306,22 +309,22 @@ class StartScreen(tk.Frame):
             active = (key == self.sel)
             disabled = self._disabled(key)
             if active:
-                self._rect(MENU_X, y, MENU_W, MENU_H, UI_START_RED)
+                self._rect(MENU_X, y, MENU_W, MENU_H, UI_START_BLUE)
             else:
                 self._line(MENU_X, y + MENU_H, MENU_X + MENU_W, y + MENU_H, UI_START_RULE)
                 if self.hover == key and not disabled:
-                    self._rect(MENU_X, y, 2, MENU_H, UI_START_RED)
+                    self._rect(MENU_X, y, 2, MENU_H, UI_START_BLUE_HI)
 
-            num_c = "#F4C8C4" if active else UI_START_DIM2
+            num_c = UI_START_ACCENT if active else UI_START_DIM2
             if active:
                 zh_c = UI_START_INK
             elif disabled:
-                zh_c = "#3E3E45"
+                zh_c = "#3B4653"
             elif self.hover == key:
-                zh_c = "#C9C9CF"
+                zh_c = "#C9D2DC"
             else:
                 zh_c = UI_START_DIM1
-            en_c = "#F6D9D6" if active else ("#33333A" if disabled else UI_START_DIM2)
+            en_c = UI_START_ACCENT if active else ("#333D49" if disabled else UI_START_DIM2)
 
             self._t(MENU_X + 18, y + 18, num, 10, num_c, F_LAT, 2.4)
             self._t(MENU_X + 56, y + 42, zh, 50, zh_c, F_MED if active else F_REG)
@@ -329,7 +332,7 @@ class StartScreen(tk.Frame):
 
             meta = self._meta(key)
             if meta:
-                self._t(0, y + 18, meta, 8.5, "#F6D9D6" if active else UI_START_DIM2,
+                self._t(0, y + 18, meta, 8.5, UI_START_ACCENT if active else UI_START_DIM2,
                         F_LAT, 1.4, right=MENU_X + MENU_W - 18)
 
     def _meta(self, key: str) -> str:
@@ -355,12 +358,12 @@ class StartScreen(tk.Frame):
             self._panel_settings(editable=(self.sel == "settings"))
 
     def _panel_frame(self, zh: str, en: str, meta: str, meta_en: str) -> None:
-        self._rect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, UI_START_YELLOW)
-        self._t(PANEL_L, 428, zh, 30, UI_START_BG, F_MED)
-        self._t(PANEL_L, 474, en, 9, "#4A4310", F_LAT, 4.2)
-        self._t(0, 428, meta, 10, "#4A4310", F_MED, 0, right=PANEL_R)
-        self._t(0, 448, meta_en, 8, "#6B6318", F_LAT, 2.2, right=PANEL_R)
-        self._line(PANEL_L, 500, PANEL_R, 500, "#3A3407")
+        self._rect(PANEL_X, PANEL_Y, PANEL_W, PANEL_H, UI_START_PANEL)
+        self._t(PANEL_L, 428, zh, 30, UI_START_INK, F_MED)
+        self._t(PANEL_L, 474, en, 9, UI_START_ACCENT, F_LAT, 4.2)
+        self._t(0, 428, meta, 10, UI_START_DIM1, F_MED, 0, right=PANEL_R)
+        self._t(0, 448, meta_en, 8, UI_START_DIM2, F_LAT, 2.2, right=PANEL_R)
+        self._line(PANEL_L, 500, PANEL_R, 500, UI_START_PANEL_RULE)
 
     def _row(self, i: int, num: str, zh: str, en: str, value: str, *,
              emphasis: bool = False, size: float = 15, focus: bool = False,
@@ -368,47 +371,46 @@ class StartScreen(tk.Frame):
              hot: bool = False) -> None:
         y = ROWS_Y + i * ROW_H
         if hover:
-            # 可点的行给一块压深的黄底：鼠标扫过就知道这行能按
+            # 可点的行给一块提亮的深蓝底：鼠标扫过就知道这行能按
             self.cv.create_rectangle(self.X(PANEL_L - 22), self.Y(y + 3),
                                      self.X(PANEL_R + 16), self.Y(y + ROW_H - 3),
-                                     fill="#DCD000", outline="")
+                                     fill=UI_START_PANEL2, outline="")
             if not focus:
-                self._rect(PANEL_L - 22, y + 3, 3, ROW_H - 6, UI_START_RED)
+                self._rect(PANEL_L - 22, y + 3, 3, ROW_H - 6, UI_START_BLUE_HI)
         if focus:
-            self._rect(PANEL_L - 18, y + 8, 4, ROW_H - 16, UI_START_BG)
-        self._t(PANEL_L, y + 14, num, 9, "#6B6318", F_LAT, 2.0)
-        self._t(PANEL_L + 36, y + 8, zh, 18, UI_START_BG, F_REG)
-        self._t(PANEL_L + 38, y + 31, en, 7.5, "#5A5413", F_LAT, 2.2)
+            self._rect(PANEL_L - 18, y + 8, 4, ROW_H - 16, UI_START_ACCENT)
+        self._t(PANEL_L, y + 14, num, 9, UI_START_DIM2, F_LAT, 2.0)
+        self._t(PANEL_L + 36, y + 8, zh, 18, UI_START_INK, F_REG)
+        self._t(PANEL_L + 38, y + 31, en, 7.5, UI_START_DIM1, F_LAT, 2.2)
         text = f"‹ {value} ›" if arrow else value
         fam = F_MED if emphasis else F_LAT
         track = 1.2 if emphasis else 0.0
         if chip:
-            # 把取值画成一个真开关：黑描边方块，悬停反白——一眼看出"这块能按"
+            # 把取值画成一个真开关：深蓝描边方块，悬停反白——一眼看出"这块能按"
             f = self._font(fam, size, False)
             w = self._text_width(text, f, track) / self._k
             self.cv.create_rectangle(
                 self.X(PANEL_R - w - 14), self.Y(y + 9),
                 self.X(PANEL_R + 14), self.Y(y + ROW_H - 9),
-                fill=UI_START_BG if hot else UI_START_YELLOW,
-                outline=UI_START_BG, width=max(1.0, 1.5 * self._k))
+                fill=UI_START_BLUE if hot else UI_START_BG,
+                outline=UI_START_PANEL_RULE, width=max(1.0, 1.5 * self._k))
             self._t(0, y + 14, text, size,
-                    UI_START_YELLOW if hot else UI_START_BG,
-                    fam, track, right=PANEL_R)
+                    UI_START_INK, fam, track, right=PANEL_R)
         else:
-            self._t(0, y + 14, text, size, UI_START_BG, fam, track, right=PANEL_R)
-        self._line(PANEL_L, y + ROW_H, PANEL_R, y + ROW_H, "#B8AC00")
+            self._t(0, y + 14, text, size, UI_START_INK, fam, track, right=PANEL_R)
+        self._line(PANEL_L, y + ROW_H, PANEL_R, y + ROW_H, UI_START_PANEL_RULE)
 
     # -- 设置面板
     def _settings_rows(self) -> list[tuple[str, str, str, str, bool, bool]]:
         disp = "全屏" if prefs.get("display") == "fullscreen" else "窗口"
         auto = "开" if prefs.get("autosave") else "关"
-        chk = "通过" if self.ok else "失败"
         return [
             ("01", "语言", "LANGUAGE", "简体中文", False, False),
             ("02", "显示", "DISPLAY", disp, True, True),
             ("03", "难度", "DIFFICULTY", "标准", False, False),
             ("04", "自动存档", "AUTOSAVE", auto, True, True),
-            ("05", "数据校验", "DATA CHECK", chk, False, True),
+            # 单一主题：这里只展示当前主题，不做三选一。
+            ("05", "主题", "THEME", "现代深色", False, False),
         ]
 
     def _row_action(self, i: int) -> str | None:
@@ -416,8 +418,7 @@ class StartScreen(tk.Frame):
         rows = self._settings_rows()
         if not (0 <= i < len(rows)):
             return None
-        return {"显示": "display", "自动存档": "autosave",
-                "数据校验": "recheck"}.get(rows[i][1])
+        return {"显示": "display", "自动存档": "autosave"}.get(rows[i][1])
 
     def _panel_settings(self, editable: bool) -> None:
         self._panel_frame(
@@ -435,7 +436,7 @@ class StartScreen(tk.Frame):
                       hot=(can_press and self.hover_row == i))
         hint = ("↑↓ 选择 · ←→ 调整 · 点击/ENTER 生效 · ESC 返回" if editable
                 else "↑↓ 选择 · ENTER 确认 · ESC 退出")
-        self._t(PANEL_L, 838, hint, 8.5, "#4A4310", F_LAT, 2.2)
+        self._t(PANEL_L, 838, hint, 10, UI_START_DIM1, F_LAT, 2.2)
 
     # -- 存档摘要
     def _panel_save(self) -> None:
@@ -456,7 +457,7 @@ class StartScreen(tk.Frame):
         ]
         for i, (num, zh, en, val) in enumerate(rows):
             self._row(i, num, zh, en, val, emphasis=(i == 5))
-        self._t(PANEL_L, 838, "ENTER 继续 · ESC 退出", 8.5, "#4A4310", F_LAT, 2.2)
+        self._t(PANEL_L, 838, "ENTER 继续 · ESC 退出", 8.5, UI_START_DIM1, F_LAT, 2.2)
 
     # -- 关于
     def _panel_about(self) -> None:
@@ -472,7 +473,7 @@ class StartScreen(tk.Frame):
         for i, (num, zh, en, val) in enumerate(rows):
             self._row(i, num, zh, en, val, emphasis=(i == 5),
                       size=12 if i == 3 else 15)
-        self._t(PANEL_L, 838, "ESC 返回菜单", 8.5, "#4A4310", F_LAT, 2.2)
+        self._t(PANEL_L, 838, "ESC 返回菜单", 8.5, UI_START_DIM1, F_LAT, 2.2)
 
     @staticmethod
     def _short(s: str, n: int) -> str:
@@ -499,7 +500,7 @@ class StartScreen(tk.Frame):
         self._line(MENU_X, 992, PANEL_R, 992, "#1C1C21")
         self._t(0, 1014, "© Cecilienne--电力公司1.0.0V", 15, "#6A6A72",
                 F_LAT, 2.0, right=PANEL_R)
-
+        
     def _draw_quit(self) -> None:
         """页脚左侧的退出按钮：点它 = 按 ESC，走同一套确认。"""
         hov = (self.hover == "quit")
@@ -507,9 +508,9 @@ class StartScreen(tk.Frame):
             self.X(QUIT_X), self.Y(QUIT_Y),
             self.X(QUIT_X + QUIT_W), self.Y(QUIT_Y + QUIT_H),
             fill=UI_START_RED if hov else UI_START_BG,
-            outline=UI_START_RED if hov else "#3A3A41",
+            outline=UI_START_RED if hov else UI_START_PANEL_RULE,
             width=max(1.0, 1.0 * self._k))
-        sub = "#F6D9D6" if hov else UI_START_DIM2
+        sub = "#E6C9C5" if hov else UI_START_DIM2
         self._t(QUIT_X + 16, QUIT_Y + 8, "退出", 16,
                 UI_START_INK if hov else UI_START_DIM1, F_MED)
         self._t(QUIT_X + 17, QUIT_Y + 29, "QUIT", 7.5, sub, F_LAT, 2.4)
@@ -660,8 +661,6 @@ class StartScreen(tk.Frame):
             self.after(60, self._render)
         elif act == "autosave":
             prefs.put("autosave", not prefs.get("autosave"))
-        elif act == "recheck":
-            self.check = self._self_check()
         prefs.save()
         self._render()
 
