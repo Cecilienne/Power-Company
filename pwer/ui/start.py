@@ -203,7 +203,7 @@ class StartScreen(tk.Frame):
         key = (family, round(px, 2), bold)
         f = self._fonts.get(key)
         if f is None:
-            size = max(7, int(round(px * self._k)))    # 下限 7px：小屏也别糊成噪点
+            size = max(10, int(round(px * self._k)))    # 下限 10px：小屏也别糊成噪点
             f = tkfont.Font(root=self, family=family, size=-size,
                             weight="bold" if bold else "normal")
             self._fonts[key] = f
@@ -497,8 +497,8 @@ class StartScreen(tk.Frame):
 
     def _draw_footer(self) -> None:
         self._line(MENU_X, 992, PANEL_R, 992, "#1C1C21")
-        self._t(0, 1014, "© 2026 电力公司 · 单机 · 零第三方依赖", 8.5, "#6A6A72",
-                F_LAT, 1.6, right=PANEL_R)
+        self._t(0, 1014, "© Cecilienne--电力公司1.0.0V", 15, "#6A6A72",
+                F_LAT, 2.0, right=PANEL_R)
 
     def _draw_quit(self) -> None:
         """页脚左侧的退出按钮：点它 = 按 ESC，走同一套确认。"""
