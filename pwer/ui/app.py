@@ -75,7 +75,7 @@ class App(tk.Tk):
         super().__init__()
         S = scale.init(self)
         mapview.TS = scale.px(TS_LOGICAL)
-        self.title("电力公司 · Power Company —— 2D 电力经营 + 证券并购")
+        self.title("电力公司 · Power Company")
         self.geometry(f"{scale.px(WIN_W)}x{scale.px(WIN_H)}+0+0")
         self.minsize(scale.px(1120), scale.px(700))
         self.configure(bg=UI_BG)
@@ -129,12 +129,14 @@ class App(tk.Tk):
         self.start.place(x=0, y=0, relwidth=1, relheight=1)
         self.start.lift()
 
-    def _start_new(self) -> None:
+    def _start_new(self, company_name: str | None = None,
+                   account_name: str | None = None) -> None:
         self.start = None
         self._apply_display()              # 菜单栏/全屏状态交还给游戏
         self._apply_audio()                # 启动页可能刚改过音频开关
         self._bind_keys()
-        self.game = Game.new_game(self._seed)
+        self.game = Game.new_game(self._seed, company_name=company_name,
+                                 account_name=account_name)
         self.refresh()
         self._fit_map()
         if not os.environ.get("PWER_NO_INTRO"):
@@ -1394,25 +1396,17 @@ class App(tk.Tk):
         self.lbl_hint.config(text=f"第 {g.turn} 回合开始 · {g.policy.summary()}", fg=UI_DIM)
 
     def new_game(self) -> None:
-        self.game = Game.new_game()
+        # 竞局结束自动重开时沿用这局的名字，别把玩家刚起的公司名丢掉。
+        old = self.game.player
+        self.game = Game.new_game(
+            company_name=getattr(old, "name", None),
+            account_name=getattr(old, "account_name", None))
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
         self.selected = None
         self.refresh()
 
-    def _intro(self) -> None:
-        g = self.game
-        messagebox.showinfo(
-            "开局提示",
-            "你接手了一家地方电力公司（盛阳电力）。\n\n"
-            "· 临江只有 300MW 需求，钢城 560MW 完全没人供电——先抢地盘。\n"
-            "· 建厂前先看地形：火电要冷却水、水电只能沿河、核电要远离城市。\n"
-            "· 电厂必须靠【变电站 + 输电线路】接到城市，否则电送不出去。\n"
-            "· 固定成本每季度照扣，别盲目堆装机；电价太高丢客户，太低亏钱。\n"
-            "· 对手财报变差时股价会跌——那就是你低价收购的机会。\n\n"
-            f"本局地图种子 {g.seed}：地形、矿脉、城市位置都由它铺开（同种子逐格一致）。\n"
-            "详细规则见菜单【帮助 → 玩法与规则】。")
 
     def save_game(self, silent: bool = False) -> None:
         import pickle
@@ -1632,8 +1626,10 @@ class App(tk.Tk):
             tv.insert("", "end", iid=str(co.idx), values=(
                 co.name, f"{co.price:.2f}", f"{chg:+.1f}%", money(co.market_cap()),
                 f"{my:.1%}", state))
+        acct = getattr(g.player, "account_name", "") or "CEO"
         self.lbl_ceo.config(
-            text=f"CEO {money(g.ceo_cash)}  ·  公司现金 {money(g.player.cash)}")
+            text=f"经营者 {acct}  ·  CEO 资金 {money(g.ceo_cash)}  ·  "
+                 f"公司现金 {money(g.player.cash)}")
         self.lb_subs.delete(0, "end")
         self._sub_keys = []
         for co in g.companies:

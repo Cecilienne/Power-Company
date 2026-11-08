@@ -64,6 +64,47 @@ ITEMS = (
     ("about", "04", "关于", "ABOUT"),
 )
 
+# ---------------------------------------------------------------- 序章页
+# 序章在创建页之前。下面全是占位模板，文字内容由你自行替换；
+# 正文用 \n\n 分段，页面会按正文栏宽自动换行。
+PROLOGUE_KICKER = "PROLOGUE / 000"
+PROLOGUE_TITLE = "电力市场开放的时代"
+PROLOGUE_SUBTITLE = "【 Era OF OPENNESS 】"
+PROLOGUE_BODY = (
+    "您的创业梦让您走向了这次创业之旅\n\n"
+    "而经过努力，你终于拥有了创业的本金\n\n"
+    "并获得了一些老旧的资产\n\n"
+    "游戏为模拟切勿带入现实"
+)
+PROLOGUE_SIGN = "2001· dpk"
+PROLOGUE_HINT = "ENTER 继续 · ESC 返回菜单"
+
+# 序章页版式（设计稿坐标，纯文字，无卡片）
+PRO_BODY_X, PRO_BODY_W = 560, 800
+PRO_BODY_Y = 382
+PRO_BTN_X = (DW - 380) / 2
+PRO_BTN_W, PRO_BTN_H = 380, 64
+
+# ---------------------------------------------------------------- 创建页
+# 这一页的文案都放这里，想改标题/说明直接改常量即可（页面会居中重排）。
+CREATE_KICKER = "NEW GAME / 001"
+CREATE_TITLE = "创建你的电力公司"
+CREATE_SUBTITLE = "FOUND YOUR POWER COMPANY"
+CREATE_DESC = "给这家公司起一个名字，再留下你的账户名。"
+CREATE_DESC2 = "这些文字会出现在公司图例、行情与每季度财报里。"
+CREATE_HINT = "ENTER 开始经营 · ESC 返回序章"
+CREATE_DEFAULT_COMPANY = "盛阳电力"
+CREATE_DEFAULT_ACCOUNT = "CEO"
+
+# 创建页表单（设计稿坐标；画布与输入框共用一组，改一处就够）
+CARD_X, CARD_Y, CARD_W, CARD_H = 480, 140, 960, 800
+FORM_X, FORM_W = 560, 800
+COMPANY_LABEL_Y, COMPANY_BOX_Y = 470, 502
+ACCOUNT_LABEL_Y, ACCOUNT_BOX_Y = 590, 622
+CREATE_BTN_Y, CREATE_BTN_W, CREATE_BTN_H = 748, 380, 64
+CREATE_BACK_X = FORM_X + CREATE_BTN_W + 20
+CREATE_HINT_Y = 846
+
 # 字体族在 __init__ 里按可用性决定（Windows 上通常全都有 Noto Sans SC）
 F_BLACK = "Noto Sans SC Black"
 F_MED = "Noto Sans SC Medium"
@@ -112,6 +153,18 @@ class StartScreen(tk.Frame):
         self._ox = self._oy = 0.0
         self._fonts: dict[tuple, tkfont.Font] = {}
         self._pending = False
+
+        # 序章页 / 创建页：开始 → 序章 → 命名 → 开局
+        self.scene = "menu"                 # menu / prologue / create
+        self._pro_btn_y = 0.0
+        self._create_built = False
+        self._create_error = ""
+        self._company_var = tk.StringVar(value="")
+        self._account_var = tk.StringVar(value="")
+        self._company_box: tk.Frame | None = None
+        self._account_box: tk.Frame | None = None
+        self._company_entry: tk.Entry | None = None
+        self._account_entry: tk.Entry | None = None
 
         # 存档与自检
         self._save_path = paths.save_file()
@@ -250,6 +303,25 @@ class StartScreen(tk.Frame):
         self.cv.create_line(self.X(x1), self.Y(y1), self.X(x2), self.Y(y2),
                             fill=color, width=max(1.0, width * self._k))
 
+    def _t_center(self, cx: float, y: float, s: str, size: float, color: str,
+                  family: str | None = None, tracking: float = 0.0,
+                  bold: bool = False) -> None:
+        """按设计稿中心线 cx 居中画文字（创建页的标题/说明不再手动算 x）。"""
+        fam = family or F_LAT
+        f = self._font(fam, size, bold)
+        w = self._text_width(s, f, tracking) / self._k
+        self._t(cx - w / 2.0, y, s, size, color, fam, tracking, bold=bold)
+
+    def _t_block(self, x: float, y: float, w: float, s: str, size: float,
+                 color: str, family: str | None = None,
+                 bold: bool = False) -> int:
+        """画自动换行的整段文字，返回 canvas item id（序章正文用）。"""
+        fam = family or F_REG
+        f = self._font(fam, size, bold)
+        return self.cv.create_text(
+            self.X(x), self.Y(y), text=s, fill=color, font=f, anchor="nw",
+            width=max(1, int(round(w * self._k))), justify="left")
+
     # ------------------------------------------------------------ 渲染
     def _schedule(self) -> None:
         if self._pending:
@@ -270,6 +342,15 @@ class StartScreen(tk.Frame):
         self._ox = (w - DW * k) / 2.0
         self._oy = (h - DH * k) / 2.0
         cv.delete("all")
+        if self.scene == "prologue":
+            self._hide_create_widgets()
+            self._draw_prologue()
+            return
+        if self.scene == "create":
+            self._draw_create()
+            self._place_create_widgets()
+            return
+        self._hide_create_widgets()
         self._draw_menu_label()
         self._draw_title()
         self._draw_menu()
@@ -277,6 +358,286 @@ class StartScreen(tk.Frame):
         self._draw_status()
         self._draw_footer()
         self._draw_quit()
+
+    # ------------------------------------------------------------ 序章页
+    def _draw_prologue(self) -> None:
+        """创建公司之前的一页文字。无卡片、无边框，只留文字。"""
+        self._rect(0, 0, DW, DH, UI_START_BG)
+
+        self._t(120, 84, PROLOGUE_KICKER, 10, UI_START_ACCENT, F_LAT, 2.6)
+        self._t(0, 84, f"v{VERSION}", 9, UI_START_DIM1, F_LAT, 1.5,
+                right=DW - 120)
+
+        self._t_center(960, 216, PROLOGUE_TITLE, 56, UI_START_INK, F_MED)
+        self._t_center(960, 294, PROLOGUE_SUBTITLE, 11, UI_START_ACCENT,
+                       F_LAT, 4.0)
+
+        body = self._t_block(PRO_BODY_X, PRO_BODY_Y, PRO_BODY_W,
+                             PROLOGUE_BODY, 16, UI_START_INK, F_REG)
+        bbox = self.cv.bbox(body)
+        body_bottom = PRO_BODY_Y
+        if bbox:
+            body_bottom = (bbox[3] - self._oy) / self._k
+        sign_y = body_bottom + 64
+        btn_y = sign_y + 64
+        self._pro_btn_y = btn_y
+
+        self._t(0, sign_y, PROLOGUE_SIGN, 12, UI_START_DIM1, F_REG,
+                right=PRO_BODY_X + PRO_BODY_W)
+
+        # 不画按钮底框：默认就是文字，悬停只提亮颜色。
+        hot = self.hover == "prologue_next"
+        self._t_center(960, btn_y + 16, "继续", 17,
+                       UI_START_ACCENT if hot else UI_START_INK, F_MED)
+        self._t_center(960, btn_y + 44, "CONTINUE", 8,
+                       UI_START_ACCENT if hot else UI_START_DIM1, F_LAT, 3.0)
+        self._t_center(960, btn_y + 96, PROLOGUE_HINT, 9.5, UI_START_DIM1,
+                       F_LAT, 1.8)
+
+    # ------------------------------------------------------------ 创建页
+    def _draw_create(self) -> None:
+        """点【开始】后的命名页：只保留纯文字与按钮，去掉所有背景框架。"""
+        # 1. 去掉全屏底色、面板底色和顶部强调条
+        # self._rect(0, 0, DW, DH, UI_START_BG)
+        # self._rect(CARD_X, CARD_Y, CARD_W, CARD_H, UI_START_PANEL)
+        # self._rect(CARD_X, CARD_Y, CARD_W, 4, UI_START_ACCENT)
+
+        # 2. 顶部信息（如果需要绝对透明背景，记得在 Canvas 初始化时设置背景透明）
+        self._t(CARD_X + 40, CARD_Y + 30, CREATE_KICKER, 10, UI_START_ACCENT,
+                F_LAT, 2.6)
+        self._t(0, CARD_Y + 30, f"v{VERSION}", 9, UI_START_INK, F_LAT, 1.5,
+                right=CARD_X + CARD_W - 40)
+
+        # 3. 居中标题与说明
+        self._t_center(960, 208, CREATE_TITLE, 56, UI_START_INK, F_MED)
+        self._t_center(960, 292, CREATE_SUBTITLE, 11, UI_START_ACCENT,
+                       F_LAT, 4.0)
+        
+        # 去掉分割线
+        # self._line(FORM_X, 348, FORM_X + FORM_W, 348, UI_START_PANEL_RULE)
+        
+        self._t_center(960, 382, CREATE_DESC, 16, UI_START_INK, F_REG)
+        self._t_center(960, 414, CREATE_DESC2, 12, UI_START_DIM1, F_REG)
+
+        # 4. 01 公司名称
+        self._t(FORM_X, COMPANY_LABEL_Y, "01", 9, UI_START_ACCENT, F_LAT, 2.0)
+        self._t(FORM_X + 34, COMPANY_LABEL_Y - 4, "公司名称", 15,
+                UI_START_INK, F_MED)
+        self._t(FORM_X + 150, COMPANY_LABEL_Y + 1, "COMPANY NAME", 11,
+                UI_START_DIM1, F_LAT, 2.4)
+
+        # 5. 02 账户名
+        self._t(FORM_X, ACCOUNT_LABEL_Y, "02", 9, UI_START_ACCENT, F_LAT, 2.0)
+        self._t(FORM_X + 34, ACCOUNT_LABEL_Y - 4, "账户名", 15,
+                UI_START_INK, F_MED)
+        self._t(FORM_X + 150, ACCOUNT_LABEL_Y + 1, "ACCOUNT NAME", 11,
+                UI_START_DIM1, F_LAT, 2.4)
+        self._t(0, ACCOUNT_LABEL_Y + 1, "会显示在行情与 CEO 资金旁", 12,
+                UI_START_DIM1, F_REG, right=FORM_X + FORM_W)
+
+        # 6. 错误提示
+        if self._create_error:
+            self._t(FORM_X, 700, self._create_error, 11, UI_START_RED, F_REG)
+
+        # 7. 底部按钮
+        self._draw_create_button(
+            FORM_X, CREATE_BTN_Y, CREATE_BTN_W, CREATE_BTN_H,
+            "开始经营", "START OPERATING", primary=True,
+            hot=(self.hover == "create_start"))
+        self._draw_create_button(
+            CREATE_BACK_X, CREATE_BTN_Y, CREATE_BTN_W, CREATE_BTN_H,
+            "返回序章", "BACK", primary=False,
+            hot=(self.hover == "create_back"))
+
+        self._t_center(960, CREATE_HINT_Y, CREATE_HINT, 9.5, UI_START_DIM1,
+                       F_LAT, 1.8)
+
+    def _draw_create_button(self, x: float, y: float, w: float, h: float,
+                            zh: str, en: str, *, primary: bool,
+                            hot: bool) -> None:
+        if primary:
+            # 卡片本身就是深蓝，主按钮改用“黑底 + 亮蓝描边”，悬停再整块点亮。
+            fill = UI_START_ACCENT if hot else UI_START_BG
+            ink = UI_START_BG if hot else UI_START_ACCENT
+            sub = UI_START_BG if hot else UI_START_ACCENT
+            outline = UI_START_ACCENT
+        else:
+            fill = UI_START_BG
+            ink = UI_START_ACCENT if hot else UI_START_INK
+            sub = UI_START_ACCENT if hot else UI_START_DIM1
+            outline = UI_START_ACCENT if hot else UI_START_DIM2
+        self.cv.create_rectangle(self.X(x), self.Y(y), self.X(x + w), self.Y(y + h),
+                                 fill=fill, outline=outline,
+                                 width=max(1.0, 1.2 * self._k))
+        self._t_center(x + w / 2, y + 10, zh, 15, ink, F_MED)
+        self._t_center(x + w / 2, y + 37, en, 7.5, sub, F_LAT, 2.2)
+
+    def _build_create_widgets(self) -> None:
+        if self._create_built:
+            return
+        self._company_box, self._company_entry = self._make_entry(self._company_var)
+        self._account_box, self._account_entry = self._make_entry(self._account_var)
+        self._create_built = True
+
+    def _make_entry(self, var: tk.StringVar) -> tuple[tk.Frame, tk.Entry]:
+        box = tk.Frame(self, bg=UI_START_BG, highlightthickness=1,
+                       highlightbackground=UI_START_PANEL_RULE,
+                       highlightcolor=UI_START_ACCENT)
+        entry = tk.Entry(
+            box, textvariable=var, relief="flat", bd=0, highlightthickness=0,
+            bg=UI_START_BG, fg=UI_START_INK, insertbackground=UI_START_ACCENT,
+            selectbackground=UI_START_BLUE, selectforeground=UI_START_INK,
+            font=self._font(F_MED, 20))
+        entry.pack(fill="both", expand=True)
+        entry.bind("<FocusIn>",
+                   lambda e, b=box: b.config(highlightbackground=UI_START_ACCENT),
+                   add="+")
+        entry.bind("<FocusOut>",
+                   lambda e, b=box: b.config(highlightbackground=UI_START_PANEL_RULE),
+                   add="+")
+        return box, entry
+
+    def _place_create_widgets(self) -> None:
+        self._build_create_widgets()
+        if self._company_box is None or self._account_box is None:
+            return
+        k = self._k
+        for box, y, entry in (
+            (self._company_box, COMPANY_BOX_Y, self._company_entry),
+            (self._account_box, ACCOUNT_BOX_Y, self._account_entry),
+        ):
+            if entry is None:
+                continue
+            box.place(x=int(round(self.X(FORM_X))), y=int(round(self.Y(y))),
+                      width=max(1, int(round(FORM_W * k))),
+                      height=max(1, int(round(64 * k))))
+            box.lift()
+            entry.pack_configure(padx=max(2, int(round(18 * k))),
+                                 pady=max(1, int(round(12 * k))))
+            entry.config(font=self._font(F_MED, 20))
+
+    def _hide_create_widgets(self) -> None:
+        for box in (self._company_box, self._account_box):
+            if box is not None:
+                box.place_forget()
+
+    def _enter_prologue(self) -> None:
+        self.scene = "prologue"
+        self.sel = "new"
+        self.choice = None
+        self.hover = None
+        self._create_error = ""
+        self._hide_create_widgets()
+        self._render()
+        try:
+            self.cv.focus_set()
+        except tk.TclError:
+            pass
+
+    def _to_create(self) -> None:
+        if self.scene != "prologue":
+            return
+        self._enter_create()
+
+    def _leave_prologue(self) -> None:
+        if self.scene != "prologue":
+            return
+        self.scene = "menu"
+        self.hover = None
+        self._render()
+        try:
+            self.cv.focus_set()
+        except tk.TclError:
+            pass
+
+    def _enter_create(self) -> None:
+        self.scene = "create"
+        self.sel = "new"
+        self.choice = None
+        self.hover = None
+        self._create_error = ""
+        self._hide_create_widgets()
+        if not self._create_built:
+            self._build_create_widgets()
+            self._company_var.set(prefs.get("company_name") or CREATE_DEFAULT_COMPANY)
+            self._account_var.set(prefs.get("account_name") or CREATE_DEFAULT_ACCOUNT)
+        self._render()
+        self.after_idle(self._focus_company)
+
+    def _focus_company(self) -> None:
+        if self.scene != "create" or self._company_entry is None:
+            return
+        try:
+            self._company_entry.focus_set()
+            self._company_entry.selection_range(0, "end")
+            self._company_entry.icursor("end")
+        except tk.TclError:
+            pass
+
+    def _leave_create(self) -> None:
+        if self.scene != "create":
+            return
+        # 创建页的“返回/ESC”回到序章，而不是直接跳回主菜单。
+        self.scene = "prologue"
+        self._create_error = ""
+        self._hide_create_widgets()
+        self.sel = "new"
+        self.hover = None
+        try:
+            self.cv.focus_set()
+        except tk.TclError:
+            pass
+        self._render()
+
+    def _submit_create(self) -> None:
+        company = self._company_var.get().strip()
+        account = self._account_var.get().strip()
+        if not company:
+            self._create_error = "请填写公司名称"
+            self._render()
+            self._focus_company()
+            return
+        if len(company) > 20:
+            self._create_error = "公司名称最多 20 个字"
+            self._render()
+            self._focus_company()
+            return
+        if not account:
+            account = CREATE_DEFAULT_ACCOUNT
+        if len(account) > 16:
+            self._create_error = "账户名最多 16 个字"
+            self._render()
+            if self._account_entry is not None:
+                self._account_entry.focus_set()
+                self._account_entry.selection_range(0, "end")
+            return
+        self._create_error = ""
+        prefs.put("company_name", company)
+        prefs.put("account_name", account)
+        prefs.save()
+        self.choice = ("new", (company, account))
+        self._close()
+        if self._on_new is not None:
+            self._on_new(company, account)
+
+    def _hit_create(self, px: int, py: int) -> str | None:
+        x = (px - self._ox) / self._k
+        y = (py - self._oy) / self._k
+        if (FORM_X <= x <= FORM_X + CREATE_BTN_W
+                and CREATE_BTN_Y <= y <= CREATE_BTN_Y + CREATE_BTN_H):
+            return "create_start"
+        if (CREATE_BACK_X <= x <= CREATE_BACK_X + CREATE_BTN_W
+                and CREATE_BTN_Y <= y <= CREATE_BTN_Y + CREATE_BTN_H):
+            return "create_back"
+        return None
+
+    def _hit_prologue(self, px: int, py: int) -> str | None:
+        x = (px - self._ox) / self._k
+        y = (py - self._oy) / self._k
+        if (PRO_BTN_X <= x <= PRO_BTN_X + PRO_BTN_W
+                and self._pro_btn_y <= y <= self._pro_btn_y + PRO_BTN_H):
+            return "prologue_next"
+        return None
 
     def _draw_menu_label(self) -> None:
         self._rect(MENU_X, 92, 10, 10, UI_START_BLUE)
@@ -548,6 +909,12 @@ class StartScreen(tk.Frame):
         return max(0, min(n - 1, int((y - ROWS_Y) // ROW_H)))
 
     def _on_motion(self, e) -> None:
+        if self.scene == "prologue":
+            self._set_hover(self._hit_prologue(e.x, e.y))
+            return
+        if self.scene == "create":
+            self._set_hover(self._hit_create(e.x, e.y))
+            return
         key = self._hit(e.x, e.y)
         row: int | None = None
         if key is None and self._hit_quit(e.x, e.y):
@@ -573,6 +940,17 @@ class StartScreen(tk.Frame):
         self._render()
 
     def _on_click(self, e) -> None:
+        if self.scene == "prologue":
+            if self._hit_prologue(e.x, e.y) == "prologue_next":
+                self._to_create()
+            return
+        if self.scene == "create":
+            key = self._hit_create(e.x, e.y)
+            if key == "create_start":
+                self._submit_create()
+            elif key == "create_back":
+                self._leave_create()
+            return
         if self._hit_quit(e.x, e.y):
             self._quit()
             return
@@ -625,6 +1003,28 @@ class StartScreen(tk.Frame):
 
     def _on_key(self, e) -> None:
         k = e.keysym
+        if self.scene == "prologue":
+            if k in ("Return", "KP_Enter", "space"):
+                self._to_create()
+            elif k == "Escape":
+                self._leave_prologue()
+            elif k == "F11":
+                self._toggle_display()
+            return
+        if self.scene == "create":
+            if k in ("Return", "KP_Enter"):
+                self._submit_create()
+            elif k == "Escape":
+                self._leave_create()
+            elif k == "F11":
+                self._toggle_display()
+            elif k == "Down" and self._account_entry is not None:
+                self._account_entry.focus_set()
+                self._account_entry.selection_range(0, "end")
+            elif k == "Up" and self._company_entry is not None:
+                self._company_entry.focus_set()
+                self._company_entry.selection_range(0, "end")
+            return
         if k in ("Up", "Down"):
             self._move(-1 if k == "Up" else 1)
         elif k in ("Return", "KP_Enter"):
@@ -685,10 +1085,8 @@ class StartScreen(tk.Frame):
 
     def _activate(self, key: str) -> None:
         if key == "new":
-            self.choice = ("new", None)
-            self._close()
-            if self._on_new is not None:
-                self._on_new()
+            # 先进入序章，再进命名页；确认后 _submit_create 才真正关掉启动页并开局。
+            self._enter_prologue()
         elif key == "continue":
             if self._save_game is None:
                 return
