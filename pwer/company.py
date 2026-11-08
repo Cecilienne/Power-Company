@@ -191,6 +191,7 @@ class IncomeStatement:
 class Company:
     idx: int
     name: str
+    account_name: str = ""      # 玩家账户名（AI 公司为空；创建页写入）
     is_player: bool = False
     cash: float = 0.0
     debt: float = 0.0
@@ -272,6 +273,7 @@ class Company:
         """旧存档兼容：补齐后来才加的行情字段，避免读档后 AttributeError。"""
         self.__dict__.update(state)
         self.__dict__.setdefault("candles", [])
+        self.__dict__.setdefault("account_name", "")
         if getattr(self, "turn_open", 0.0) <= 0:
             self.turn_open = self.price
         if getattr(self, "turn_high", 0.0) <= 0:
