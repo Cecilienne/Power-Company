@@ -94,6 +94,10 @@ def buy_shares(game, holder, target: Company, qty: float) -> float:
     """holder 以市价买入 target 的股票，返回花费（万元）。"""
     if target.delisted:
         raise MaError("该公司已退市，无法交易")
+    if holder in (game.player_idx, CEO) and target.idx != game.player_idx:
+        ban = game.player.banned_acq_days
+        if ban > 0:
+            raise MaError(f"反垄断禁令：{ban} 天内不得收购其他公司股票")
     if holder == target.idx:
         raise MaError("回购自家股票请使用【回购】操作")
     qty = min(qty, target.shares * 0.95)

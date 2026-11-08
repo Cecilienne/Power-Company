@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .constants import (
+    DAYS_PER_QUARTER,
     INFRA_SPECS,
     MINE_FIXED,
     PLANT_SPECS,
@@ -37,7 +38,7 @@ class Plant:
     life_q: float = 60.0
     # 运行时状态
     online: bool = True
-    outage_turns: int = 0
+    outage_days: int = 0
     cf_actual: float = 0.0
     available_mwh: float = 0.0
     dispatched_mwh: float = 0.0
@@ -126,6 +127,18 @@ class Project:
     @property
     def per_turn(self) -> float:
         return self.capex / max(1, self.turns_total)
+
+    @property
+    def days_total(self) -> int:
+        return max(1, self.turns_total * DAYS_PER_QUARTER)
+
+    @property
+    def days_left(self) -> int:
+        return max(0, self.days_total - int(self.progress * self.days_total))
+
+    @property
+    def progress_pct(self) -> float:
+        return max(0.0, min(1.0, self.progress))
 
 
 @dataclass
@@ -232,7 +245,7 @@ class Company:
     market_share: float = 0.0
     risk_flags: list[str] = field(default_factory=list)
     ai_alerted: bool = False
-    banned_acq_turns: int = 0
+    banned_acq_days: int = 0
     city_served: dict[int, tuple[float, float, float]] = field(default_factory=dict)
     home_city: int = -1           # AI 公司的离屏城市；玩家为 -1
 

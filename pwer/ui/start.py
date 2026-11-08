@@ -704,7 +704,7 @@ class StartScreen(tk.Frame):
         if key == "continue":
             if self._save_game is None:
                 return "无存档 · NO SAVE"
-            return f"第 {self._save_game.turn} 回合"
+            return f"第 {self._save_game.turn} 季度"
         if key == "settings":
             return "当前配置"
         if key == "about":
@@ -807,13 +807,13 @@ class StartScreen(tk.Frame):
     def _panel_save(self) -> None:
         g = self._save_game
         assert g is not None
-        self._panel_frame("存档", "SAVE", f"第 {g.turn} 回合", "CONTINUE")
+        self._panel_frame("存档", "SAVE", f"第 {g.turn} 季度", "CONTINUE")
         try:
             when = datetime.fromtimestamp(self._save_path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
         except Exception:  # noqa: BLE001
             when = "—"
         rows = [
-            ("01", "进度", "PROGRESS", f"第 {g.turn} 回合 / {MAX_TURNS}"),
+            ("01", "进度", "PROGRESS", f"第 {g.turn} 季度 / {MAX_TURNS}"),
             ("02", "存档时间", "SAVED", when),
             ("03", "现金", "CASH", money(g.player.cash)),
             ("04", "市值", "MARKET CAP", money(g.player.market_cap())),

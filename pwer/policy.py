@@ -99,10 +99,10 @@ def check_antitrust(game) -> list[str]:
             if n >= ANTITRUST_TURNS:
                 st.fines += ANTITRUST_FINE
                 co.reputation = max(0.0, co.reputation - 8.0)
-                co.banned_acq_turns = 2
+                co.banned_acq_days = 180
                 game.policy.antitrust[co.idx] = 0
                 msgs.append(f"⛔ {co.name} 因掠夺定价被反垄断处罚：罚款 {ANTITRUST_FINE:,.0f}万元，"
-                            f"2 回合内禁止收购")
+                            f"180 天内禁止收购")
         else:
             game.policy.antitrust[co.idx] = 0
     return msgs

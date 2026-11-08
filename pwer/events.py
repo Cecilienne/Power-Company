@@ -64,10 +64,10 @@ def _ev_storm(game) -> str:
         return "风暴过境，但当地没有可受损的机组"
     p = game.rng.choice(online)
     p.online = False
-    p.outage_turns = game.rng.randint(1, 2)
+    p.outage_days = game.rng.randint(30, 60)
     co.reputation = max(0.0, co.reputation - 4.0)
     game.demand_shock *= 1.02
-    return f"风暴摧毁 {co.name} 的一处线路，{p.name} 停机 {p.outage_turns} 回合"
+    return f"风暴摧毁 {co.name} 的一处线路，{p.name} 停机 {p.outage_days} 天"
 
 
 def _ev_strike(game) -> str:
@@ -149,6 +149,15 @@ EVENTS: tuple[EventDef, ...] = (
     EventDef("env_fine", "环保处罚", 7, 4, _ev_env_fine),
     EventDef("tech", "新能源降价", 5, 6, _ev_tech),
 )
+
+
+EVENT_BY_KEY = {e.key: e for e in EVENTS}
+
+# 触发时会自动暂停时钟的负面事件
+MAJOR_NEGATIVE_KEYS = frozenset({
+    "coal_spike", "uranium_spike", "drought", "storm", "strike",
+    "mine_accident", "recession", "env_fine",
+})
 
 
 def roll_event(game) -> EventDef | None:

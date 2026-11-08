@@ -30,6 +30,7 @@ from .constants import (
     COMMODITY_MIN,
     COMMODITY_VOL,
     CORP_TAX,
+    DAYS_PER_QUARTER,
     CEO_SALARY,
     GREEN_CARBON_INTENSITY,
     GREEN_RENEWABLE,
@@ -53,7 +54,7 @@ from .constants import (
     money,
 )
 from .dispatch import season_index, settle_production
-from .events import roll_event
+from .events import EVENT_BY_KEY, MAJOR_NEGATIVE_KEYS, roll_event
 from .ma import CEO, player_stake
 from .policy import PolicyState, apply_quota_penalty, check_antitrust, policy_for_turn
 from .valuation import update_all_prices
@@ -87,6 +88,15 @@ class Game:
     companies: list[Company] = field(default_factory=list)
     player_idx: int = 0
     turn: int = 1
+    day: int = 1
+    clock_paused: bool = True
+    pause_reason: str = "准备阶段"
+    cash_warned: bool = False
+    event_day: int = 0
+    event_key: str = ""
+    event_seq: int = 0
+    last_event_name: str = ""
+    quarter_report: str = ""
     policy: PolicyState = field(default_factory=PolicyState)
     market: dict[str, float] = field(default_factory=dict)
     market_raw: dict[str, float] = field(default_factory=dict)
@@ -149,6 +159,10 @@ class Game:
         g.log(f"=== 《电力公司》开局：{g.player.name} 开始经营 ===")
         g.log(f"现金 {money(g.player.cash)} · 负债 {money(g.player.debt)} · "
               f"装机 {g.player.gen_capacity():.0f}MW · 员工 {g.player.ops_staff} 班组")
+        g.day = 1
+        g.clock_paused = True
+        g.pause_reason = "准备阶段"
+        g._schedule_event()
         return g
 
     def next_id(self) -> int:
@@ -289,7 +303,34 @@ class Game:
 
     def turn_label(self) -> str:
         s = SEASON_NAMES[season_index(self.turn)]
-        return f"第 {self.turn} 回合 · {self.year_of()}年{s}季"
+        return f"第 {self.turn} 季度 · {self.year_of()}年{s}季"
+
+    def date_label(self) -> str:
+        s = SEASON_NAMES[season_index(self.turn)]
+        return f"{self.year_of()}年{s}季 · 第 {self.day} 天"
+
+    def _schedule_event(self) -> None:
+        """每季度抽一次事件，随机安排在季中某天触发。"""
+        self.event_day = 0
+        self.event_key = ""
+        ev = roll_event(self)
+        if ev is not None:
+            self.event_key = ev.key
+            self.event_day = self.rng.randint(12, 78)
+
+    def _fire_event(self) -> None:
+        ev = EVENT_BY_KEY.get(self.event_key)
+        self.event_day = 0
+        self.event_key = ""
+        if ev is None or self.turn < ev.min_turn:
+            return
+        msg = ev.apply(self)
+        self.event_seq += 1
+        self.last_event_name = ev.name
+        self.log(f"【{ev.name}】{msg}")
+        if ev.key in MAJOR_NEGATIVE_KEYS:
+            self.clock_paused = True
+            self.pause_reason = f"事件：{ev.name}"
 
     # ------------------------------------------------------------ 初始化公司
     def _build_companies(self, company_name: str | None = None,
@@ -448,7 +489,8 @@ class Game:
         co.projects.append(pr)
         t = self.world.tile(x, y)
         t.owner, t.kind, t.ref = co.idx, kind, -pid - 1
-        self.log(f"{co.name} 开工 {spec.name}（{x},{y}），投资 {money(total)}，工期 {turns} 回合")
+        self.log(f"{co.name} 开工 {spec.name}（{x},{y}），投资 {money(total)}，"
+                 f"工期 {turns * DAYS_PER_QUARTER} 天")
         return True
 
     # ------------------------------------------------------------ 人力
@@ -494,18 +536,19 @@ class Game:
         return amount
 
     # ------------------------------------------------------------ 工程推进
-    def advance_projects(self) -> None:
+    def advance_projects(self, days: float = 1.0) -> None:
+        """按天推进工程；一个季度 = DAYS_PER_QUARTER 天。"""
         for co in self.companies:
             if not co.alive or co.delisted or not co.projects:
                 continue
             need = sum(p.teams for p in co.projects)
             ratio = min(1.0, co.eng_teams / need) if need else 1.0
             for pr in list(co.projects):
-                pr.progress += ratio
+                pr.progress += ratio * days / DAYS_PER_QUARTER
                 pr.turns_left = max(0, pr.turns_total - int(pr.progress))
                 if ratio < 1.0:
                     pr.stalled_turns += 1
-                if pr.progress + 1e-9 >= pr.turns_total:
+                if pr.progress + 1e-9 >= 1.0:
                     self._complete(co, pr)
 
     def _complete(self, co: Company, pr: Project) -> None:
@@ -640,14 +683,50 @@ class Game:
                 return
 
     # ------------------------------------------------------------ 主循环
-    def end_turn(self) -> list[str]:
-        """结束本回合，返回本回合产生的消息。"""
+    def advance_day(self) -> list[str]:
+        """推进一天：工程/停机/禁令按天走，季度末自动结算。"""
+        if self.game_over:
+            return []
+        self.messages = []
+        self.advance_projects(1.0)
+
+        for co in self.companies:
+            for p in co.plants:
+                if not p.online and p.outage_days > 0:
+                    p.outage_days -= 1
+                    if p.outage_days <= 0:
+                        p.online = True
+                        self.log(f"{co.name} 的{p.name}恢复并网")
+            if co.banned_acq_days > 0:
+                co.banned_acq_days -= 1
+
+        self.day += 1
+        if self.day > DAYS_PER_QUARTER:
+            self.day = 1
+            self.close_quarter()
+            return self.messages
+
+        if self.event_day and self.day >= self.event_day:
+            self._fire_event()
+
+        if self.player.cash < 0:
+            if not self.cash_warned:
+                self.clock_paused = True
+                self.pause_reason = "现金为负"
+                self.cash_warned = True
+        else:
+            self.cash_warned = False
+        return self.messages
+
+    def close_quarter(self) -> list[str]:
+        """季度结算：AI/经济/政策/股价/胜负，事件已在日中触发。"""
         if self.game_over:
             return []
         self.messages = []
         self.turn_counter += 1
+        closed_turn = self.turn
 
-        # A. AI 行动
+        # A. AI 行动（只在季末跑，避免每天重复借款/定价）
         for co in self.companies:
             if co.is_player or not co.alive or co.delisted:
                 continue
@@ -655,49 +734,69 @@ class Game:
                 continue
             ai_mod.ai_turn(self, co)
 
-        # B. 工程推进
-        self.advance_projects()
-
-        # C. 生产结算
+        # B. 生产结算
         settle_production(self)
 
-        # D. 政策
+        # C. 政策
         for co in self.companies:
             if co.alive and not co.delisted:
                 apply_quota_penalty(self, co)
         for msg in check_antitrust(self):
             self.log(msg)
 
-        # E. 股利（按上季度利润）
+        # D. 股利（按上季度利润）
         self.collect_dividends()
 
-        # F. 财务
+        # E. 财务
         self.settle_finance()
 
-        # G. 股价
+        # F. 股价
         update_all_prices(self)
 
-        # H. 控股/被收购
+        # G. 控股/被收购
         self.check_control()
         if self.game_over:
+            self.day = 1
+            self.clock_paused = True
+            self.pause_reason = "游戏结束"
             return self.messages
 
-        # I. 随机事件
-        ev = roll_event(self)
-        if ev is not None:
-            msg = ev.apply(self)
-            self.log(f"【{ev.name}】{msg}")
-
-        # J. 进入下一回合
+        # H. 进入下一回合
         self._advance_turn()
+        self.day = 1
 
-        # K. 胜负
+        st = self.player.last_income
+        self.quarter_report = (f"第 {closed_turn} 季度结算：营收 {money(st.revenue)} · "
+                               f"净利 {money(st.net_profit)} · 现金 {money(self.player.cash)}")
+        self.clock_paused = True
+        self.pause_reason = "季度结算"
+
+        # I. 胜负
         self._check_end()
         return self.messages
 
+    def skip_to_quarter_end(self) -> list[str]:
+        """把当前季度剩余天数一次跑完，停在季末结算。"""
+        if self.game_over:
+            return []
+        start = self.turn
+        guard = 0
+        while not self.game_over and self.turn == start and guard <= DAYS_PER_QUARTER:
+            self.advance_day()
+            guard += 1
+        self.clock_paused = True
+        self.pause_reason = "已跳到季度末"
+        return self.messages
+
+    def end_turn(self) -> list[str]:
+        """兼容旧调用：直接跳到季度末。"""
+        return self.skip_to_quarter_end()
+
     def _advance_turn(self) -> None:
         self.turn += 1
+        nuclear = self.policy.nuclear_approved
         self.policy = policy_for_turn(self.turn)
+        self.policy.nuclear_approved = nuclear
         self.demand_shock = 1.0
         self.weather = {"rain": 1.0, "wind": 1.0, "solar": 1.0, "heat": 1.0}
         for city in self.cities:
@@ -705,18 +804,11 @@ class Game:
         self._walk_market()
         for co in self.companies:
             co.open_candle()             # 新回合：以上回合收盘价为开盘价
-            for p in co.plants:
-                if not p.online:
-                    p.outage_turns -= 1
-                    if p.outage_turns <= 0:
-                        p.online = True
-                        self.log(f"{co.name} 的{p.name}恢复并网")
             # 声望向 60 回归
             co.reputation += (60.0 - co.reputation) * 0.06
-            if co.banned_acq_turns > 0:
-                co.banned_acq_turns -= 1
             co.risk_flags = [f for f in co.risk_flags if f]
         self.ceo_cash += CEO_SALARY
+        self._schedule_event()
 
     def _check_end(self) -> None:
         player = self.player

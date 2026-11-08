@@ -1,14 +1,15 @@
 """《电力公司》主界面。
 
 布局：
-    顶栏   —— 回合、现金、负债、股价、市值、份额、政策
-    左栏   —— 2D 格子地图 + 公司图例 + 选中地块信息 + 回合动态
+    顶栏   —— 日期时钟、现金、负债、股价、市值、份额、政策
+    左栏   —— 2D 格子地图 + 公司图例 + 选中地块信息 + 季度动态
     右栏   —— 经营 / 财报 / 股市 / 政策日志 四个页签
-    底栏   —— 结束回合 + 建造模式提示
+    底栏   —— 日期/时钟 + 建造模式提示
 """
 from __future__ import annotations
 
 import os
+import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -18,7 +19,9 @@ from ..constants import (
     ANTITRUST_SHARE,
     CITY_LICENSE_COST,
     CITY_LICENSE_REP,
+    CLOCK_SPEEDS,
     COMPANY_COLORS,
+    DAYS_PER_QUARTER,
     DIVIDEND_MAX,
     INFRA_SPECS,
     INTERCITY_LINK_CAP,
@@ -28,6 +31,7 @@ from ..constants import (
     PLANT_SPECS,
     POLICY_SCHEDULE,
     SAVE_VERSION,
+    SECONDS_PER_DAY,
     TERRAIN_INFO,
     UI_ACCENT,
     UI_BAD,
@@ -94,6 +98,12 @@ class App(tk.Tk):
         self._log_rendered = 0
         self.panel: str | None = None      # 当前打开的抽屉：policy / stock / company
         self._map_fit_job = None
+        self.clock_speed = 1
+        self._clock_accum = 0.0
+        self._clock_last = time.monotonic()
+        self._clock_job = None
+        self._last_event_seq = self.game.event_seq
+        self._last_turn = self.game.turn
         self._seed = seed
         self.start = None                  # 启动页覆盖层（不是独立窗口）
         self._style()
@@ -109,6 +119,7 @@ class App(tk.Tk):
         self._build_stage(body)            # 白：地图 + 抽屉
         self.refresh()
         self.after(80, self._fit_map)
+        self._clock_job = self.after(100, self._clock_tick)
         if show_start:
             # 启动页盖在同一个窗口上：点【开始】只把覆盖层摘掉，不销毁窗口再开一个
             self.open_start()
@@ -143,6 +154,7 @@ class App(tk.Tk):
         self._bind_keys()
         self.game = Game.new_game(self._seed, company_name=company_name,
                                  account_name=account_name)
+        self._reset_clock()
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
@@ -159,6 +171,7 @@ class App(tk.Tk):
         self._apply_audio()
         self._bind_keys()
         self.game = game
+        self._reset_clock()
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
@@ -169,7 +182,8 @@ class App(tk.Tk):
         self.toast("存档已载入")
 
     def _bind_keys(self) -> None:
-        self.bind("<Control-Return>", lambda e: self.end_turn())
+        self.bind("<Control-Return>", lambda e: self.toggle_pause())
+        self.bind("<space>", lambda e: self.toggle_pause())
         self.bind("<Escape>", self._on_escape)
         self.bind("<F11>", self._toggle_display)
         self.bind("<Control-Key-1>", lambda e: self.toggle_panel("policy"))
@@ -178,7 +192,7 @@ class App(tk.Tk):
 
     def _unbind_keys(self) -> None:
         """回主菜单时把游戏内的快捷键摘掉，免得和启动页抢键。"""
-        for seq in ("<Control-Return>", "<Escape>", "<F11>",
+        for seq in ("<Control-Return>", "<space>", "<Escape>", "<F11>",
                     "<Control-Key-1>", "<Control-Key-2>", "<Control-Key-3>"):
             try:
                 self.unbind(seq)
@@ -339,25 +353,52 @@ class App(tk.Tk):
     # ------------------------------------------------------------ 顶部：数据条 + 时间块
     def _build_top(self) -> None:
         P = scale.px
-        top = tk.Frame(self, bg=UI_BG, height=P(84))
+        top = tk.Frame(self, bg=UI_BG, height=P(94))
         top.pack(fill="x", side="top")
         top.pack_propagate(False)
 
-        # 蓝：时间块（右上）——回合 / 年季 / 结束回合
-        time_box = tk.Frame(top, bg=UI_BLUE, width=P(340))
+        # 蓝：时间块（右上）——日期 / 暂停与倍速 / 跳到季末
+        time_box = tk.Frame(top, bg=UI_BLUE, width=P(470))
         time_box.pack(side="right", fill="y")
         time_box.pack_propagate(False)
-        self.lbl_turn = tk.Label(time_box, text="", bg=UI_BLUE, fg=UI_TEXT,
+        head = tk.Frame(time_box, bg=UI_BLUE)
+        head.pack(fill="x", padx=P(12), pady=(P(6), 0))
+        self.lbl_turn = tk.Label(head, text="", bg=UI_BLUE, fg=UI_TEXT,
                                  font=(FONT, 12, "bold"), anchor="w")
-        self.lbl_turn.pack(fill="x", padx=P(12), pady=(P(8), 0))
+        self.lbl_turn.pack(side="left")
+        self.btn_end = tk.Button(head, text="跳到季末", command=self.skip_to_quarter_end,
+                                 bg=UI_BLUE_HI, fg=UI_TEXT,
+                                 activebackground=UI_ACCENT, activeforeground=UI_BG,
+                                 bd=0, relief="flat", font=(FONT, 8, "bold"),
+                                 padx=P(8), pady=P(1), cursor="hand2")
+        self.btn_end.pack(side="right", padx=(P(8), 0))
         row = tk.Frame(time_box, bg=UI_BLUE)
-        row.pack(fill="x", padx=P(12), pady=(P(2), P(8)))
+        row.pack(fill="x", padx=P(12), pady=(P(2), 0))
         self.lbl_season = tk.Label(row, text="", bg=UI_BLUE, fg=UI_DIM,
                                    font=(FONT, 8), anchor="w")
         self.lbl_season.pack(side="left")
-        self.btn_end = ttk.Button(row, text="结束回合 ▶", command=self.end_turn,
-                                  style="Accent.TButton")
-        self.btn_end.pack(side="right")
+        controls = tk.Frame(row, bg=UI_BLUE)
+        controls.pack(side="right")
+        self.btn_clock = tk.Button(controls, text="继续", command=self.toggle_pause,
+                                   bg=UI_BLUE_HI, fg=UI_TEXT,
+                                   activebackground=UI_ACCENT, activeforeground=UI_BG,
+                                   bd=0, relief="flat", font=(FONT, 8, "bold"),
+                                   padx=P(8), pady=P(1), cursor="hand2")
+        self.btn_clock.pack(side="left")
+        self.speed_btns = {}
+        for sp in CLOCK_SPEEDS:
+            b = tk.Button(controls, text=f"{sp}x", command=lambda s=sp: self.set_clock_speed(s),
+                          bg=UI_BLUE_HI, fg=UI_TEXT,
+                          activebackground=UI_ACCENT, activeforeground=UI_BG,
+                          bd=0, relief="flat", font=(FONT, 8),
+                          padx=P(6), pady=P(1), cursor="hand2")
+            b.pack(side="left", padx=(P(4), 0))
+            self.speed_btns[sp] = b
+        self.clock_bar = tk.Canvas(time_box, height=P(3), bg=UI_BLUE_HI,
+                                   highlightthickness=0, bd=0)
+        self.clock_bar.pack(side="bottom", fill="x", pady=(P(3), 0))
+        self.clock_fill = self.clock_bar.create_rectangle(0, 0, 0, P(3),
+                                                          fill=UI_ACCENT, width=0)
 
         # 青：数据条（左上），底部 1px 细线与启动页的页脚线同一套规矩
         stats = tk.Frame(top, bg=UI_BG)
@@ -378,6 +419,105 @@ class App(tk.Tk):
             lab = tk.Label(f, text="-", bg=UI_BG, fg=color, font=(FONT, 11, "bold"))
             lab.pack(anchor="w")
             self.top_stats[key] = lab
+
+    # ------------------------------------------------------------ 季度时钟
+    def _reset_clock(self) -> None:
+        self._clock_accum = 0.0
+        self._clock_last = time.monotonic()
+        self._last_event_seq = self.game.event_seq
+        self._last_turn = self.game.turn
+
+    def toggle_pause(self) -> None:
+        g = self.game
+        if g.game_over:
+            return
+        g.clock_paused = not g.clock_paused
+        g.pause_reason = "手动暂停" if g.clock_paused else ""
+        self._clock_accum = 0.0
+        self._clock_last = time.monotonic()
+        self._sync_clock()
+
+    def _pause_clock(self, reason: str) -> None:
+        g = self.game
+        if g.game_over:
+            return
+        g.clock_paused = True
+        g.pause_reason = reason
+        self._clock_accum = 0.0
+        self._sync_clock()
+
+    def set_clock_speed(self, speed: int) -> None:
+        self.clock_speed = speed
+        self._clock_accum = 0.0
+        self._clock_last = time.monotonic()
+        self._sync_clock()
+
+    def _clock_tick(self) -> None:
+        self._clock_job = None
+        try:
+            g = self.game
+            if self.start is None and not g.game_over:
+                now = time.monotonic()
+                dt = max(0.0, now - self._clock_last)
+                self._clock_last = now
+                if not g.clock_paused:
+                    self._clock_accum += dt * self.clock_speed
+                    guard = 0
+                    while (self._clock_accum >= SECONDS_PER_DAY
+                           and not g.game_over and not g.clock_paused and guard < 20):
+                        self._clock_accum -= SECONDS_PER_DAY
+                        self._clock_day()
+                        guard += 1
+                self._update_clock_progress()
+        finally:
+            self._clock_job = self.after(100, self._clock_tick)
+
+    def _clock_day(self) -> None:
+        g = self.game
+        old_turn = g.turn
+        g.advance_day()
+        if g.game_over:
+            self._clock_accum = 0.0
+            self.refresh()
+            self.after(30, self._after_turn)
+            return
+        if g.turn != old_turn:
+            self._clock_accum = 0.0
+            if prefs.get("autosave"):
+                self.save_game(silent=True)
+            self._after_turn()
+            if g.quarter_report and not g.game_over:
+                self.toast(g.quarter_report,
+                           bad=g.player.last_income.net_profit < 0)
+        elif g.event_seq != self._last_event_seq:
+            self.toast(f"事件：{g.last_event_name}", bad=True)
+        self._last_event_seq = g.event_seq
+        self._last_turn = g.turn
+        self.refresh()
+
+    def _update_clock_progress(self) -> None:
+        if not hasattr(self, "clock_bar"):
+            return
+        w = max(1, self.clock_bar.winfo_width())
+        frac = 0.0 if self.game.clock_paused else min(1.0, self._clock_accum / SECONDS_PER_DAY)
+        self.clock_bar.coords(self.clock_fill, 0, 0, w * frac, scale.px(3))
+
+    def _sync_clock(self) -> None:
+        if not hasattr(self, "btn_clock"):
+            return
+        g = self.game
+        paused = g.clock_paused or g.game_over
+        self.btn_clock.config(text="继续" if paused else "暂停",
+                              state="disabled" if g.game_over else "normal")
+        for sp, btn in self.speed_btns.items():
+            on = sp == self.clock_speed
+            btn.config(bg=UI_ACCENT if on else UI_BLUE_HI,
+                       fg=UI_BG if on else UI_TEXT)
+        mark = " · 已暂停" if paused and not g.game_over else ""
+        if g.game_over:
+            mark = "  · 已结束"
+        self.lbl_turn.config(text=g.date_label() + mark)
+        self._update_clock_progress()
 
     # ------------------------------------------------------------ 左轨：页签 + 其它按钮
     def _build_rail(self, parent) -> None:
@@ -679,6 +819,8 @@ class App(tk.Tk):
         if key == self.panel:
             key = None
         self.panel = key
+        if key is not None:
+            self._pause_clock("打开侧栏")
         if key is None:
             self.drawer.place_forget()
         else:
@@ -754,6 +896,7 @@ class App(tk.Tk):
         return "其他公司"
 
     def show_city_overview(self) -> None:
+        self._pause_clock("城市总览")
         win = getattr(self, "_city_win", None)
         if win is not None and win.winfo_exists():
             win.lift()
@@ -898,6 +1041,7 @@ class App(tk.Tk):
             self._fill_city_overview()
 
     def _enter_city(self, idx: int) -> None:
+        self._pause_clock("切换城市")
         ok, why = self.game.switch_city(idx)
         if not ok:
             self.toast(why, bad=True)
@@ -1004,10 +1148,10 @@ class App(tk.Tk):
             self.tv_plants.heading(c, text=t)
             self.tv_plants.column(c, width=P(w), anchor="center")
         self.tv_plants.pack(fill="x")
-        self.tv_projects = ttk.Treeview(box, columns=("name", "left", "cost"),
+        self.tv_projects = ttk.Treeview(box, columns=("name", "left", "prog", "cost"),
                                         show="headings", height=2)
-        for c, t, w in (("name", "在建工程", 140), ("left", "剩余工期", 70),
-                        ("cost", "已投", 90)):
+        for c, t, w in (("name", "在建工程", 120), ("left", "剩余", 56),
+                        ("prog", "进度", 118), ("cost", "已投", 76)):
             self.tv_projects.heading(c, text=t)
             self.tv_projects.column(c, width=P(w), anchor="center")
         self.tv_projects.tag_configure("empty", foreground=UI_DIM)
@@ -1179,7 +1323,7 @@ class App(tk.Tk):
                 candles.append(live)
         candles = candles[-26:]
         if not candles:
-            cv.create_text(w // 2, h // 2, text="还没有行情 · 结束一个回合后生成第一根 K 线",
+            cv.create_text(w // 2, h // 2, text="还没有行情 · 跳到季末后生成第一根 K 线",
                            fill=UI_DIM, font=(FONT, 9))
             self.lbl_kline.config(text=f"{tgt.name}  尚未开盘", fg=UI_DIM)
             self.lbl_kline2.config(text="")
@@ -1311,7 +1455,12 @@ class App(tk.Tk):
 
     def _restore_hint(self) -> None:
         self._toast_job = None
-        self.lbl_hint.config(text=self._idle_hint(), fg=UI_DIM)
+        if (not self.build_mode and self.panel is None
+                and not self.game.game_over):
+            text = f"{self.game.date_label()} · {self.game.policy.summary()}"
+        else:
+            text = self._idle_hint()
+        self.lbl_hint.config(text=text, fg=UI_DIM)
 
     def _idle_hint(self) -> str:
         if self.build_mode:
@@ -1319,7 +1468,7 @@ class App(tk.Tk):
                     else INFRA_SPECS[self.build_mode].name)
             n = len(self.map.valid_tiles)
             return f"建造模式：{name} · 可建 {n} 处（其余地块已变暗）· 点击地图确认，Esc 退出"
-        return "选择建筑类型后点击地图建造；调好电价再结束回合"
+        return "选择建筑类型后点击地图建造；调好电价后按空格继续时间"
 
     def on_tile_click(self, x: int, y: int) -> None:
         self.selected = (x, y)
@@ -1359,6 +1508,7 @@ class App(tk.Tk):
         self.lbl_tile.config(text=tile_tooltip(self.game, *self.selected), fg=UI_TEXT)
 
     def set_build(self, kind: str) -> None:
+        self._pause_clock("建造模式")
         self.build_mode = kind
         me = self.game.player
         # 960×960 全图逐格检查要 1~2 秒，只算视野附近（外扩 40 格）——
@@ -1445,7 +1595,7 @@ class App(tk.Tk):
         warn = ""
         if me.market_share > ANTITRUST_SHARE and (
                 me.res_price < unit * 0.98 or me.ind_price < unit * 0.98):
-            warn = "⚠ 市占率超过 55% 且低于成本价销售，反垄断风险上升（连续 3 回合触发处罚）"
+            warn = "⚠ 市占率超过 55% 且低于成本价销售，反垄断风险上升（连续 3 个季度触发处罚）"
         self.lbl_antitrust.config(text=warn)
 
     # ------------------------------------------------------------ 交互：股票
@@ -1569,17 +1719,30 @@ class App(tk.Tk):
             self.toast(str(e), bad=True)
         self.refresh()
 
-    # ------------------------------------------------------------ 回合
-    def end_turn(self) -> None:
+    # ------------------------------------------------------------ 时间 / 季度
+    def skip_to_quarter_end(self) -> None:
         if self.game.game_over:
             return
         self.build_mode = None
         self.map.build_mode = None
-        self.game.end_turn()
+        self.map.valid_tiles = set()
+        self.game.skip_to_quarter_end()
+        self._clock_accum = 0.0
+        self._last_turn = self.game.turn
+        self._last_event_seq = self.game.event_seq
         self.refresh()
         if prefs.get("autosave"):
             self.save_game(silent=True)
-        self.after(30, self._after_turn)
+        if self.game.game_over:
+            self.after(30, self._after_turn)
+        else:
+            self._after_turn()
+            if self.game.quarter_report:
+                self.toast(self.game.quarter_report,
+                           bad=self.game.player.last_income.net_profit < 0)
+
+    def end_turn(self) -> None:
+        self.skip_to_quarter_end()
 
     def _after_turn(self) -> None:
         g = self.game
@@ -1590,7 +1753,7 @@ class App(tk.Tk):
             messagebox.showinfo(title, g.result_detail + "\n\n点击确定开始新游戏。")
             self.new_game()
             return
-        self.lbl_hint.config(text=f"第 {g.turn} 回合开始 · {g.policy.summary()}", fg=UI_DIM)
+        self.lbl_hint.config(text=f"{g.date_label()} · {g.policy.summary()}", fg=UI_DIM)
 
     def new_game(self) -> None:
         # 竞局结束自动重开时沿用这局的名字，别把玩家刚起的公司名丢掉。
@@ -1598,6 +1761,7 @@ class App(tk.Tk):
         self.game = Game.new_game(
             company_name=getattr(old, "name", None),
             account_name=getattr(old, "account_name", None))
+        self._reset_clock()
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
@@ -1635,6 +1799,7 @@ class App(tk.Tk):
                 self.toast("存档版本过旧，无法读取", bad=True)
                 return
             self.game = game
+            self._reset_clock()
             self.build_mode = None
             self.map.build_mode = None
             self.map.valid_tiles = set()
@@ -1665,7 +1830,6 @@ class App(tk.Tk):
         self._syncing = True
         P = scale.px
 
-        self.lbl_turn.config(text=g.turn_label())
         self.lbl_season.config(text=f"{g.policy.stage()} · 需求 {g.total_demand():,.0f}MW")
         self.top_stats["cash"].config(text=money(me.cash))
         self.top_stats["debt"].config(text=money(me.debt))
@@ -1715,9 +1879,13 @@ class App(tk.Tk):
         tp = self.tv_projects
         tp.delete(*tp.get_children())
         if not me.projects:
-            tp.insert("", "end", values=("暂无在建工程", "—", "—"), tags=("empty",))
+            tp.insert("", "end", values=("暂无在建工程", "—", "—", "—"), tags=("empty",))
         for pr in me.projects:
-            tp.insert("", "end", values=(pr.name, f"{pr.turns_left} 回合", f"{pr.spent:,.0f}万"))
+            n = int(round(pr.progress_pct * 10))
+            bar = "█" * n + "░" * (10 - n)
+            tp.insert("", "end", values=(pr.name, f"{pr.days_left}天",
+                                          f"{bar} {pr.progress_pct:.0%}",
+                                          f"{pr.spent:,.0f}万"))
 
         st = me.last_income
         self.lbl_fin_head.config(text=f"{me.name} · {g.year_of()}年 第{(g.turn - 1) % 4 + 1}季度 利润表")
@@ -1760,6 +1928,7 @@ class App(tk.Tk):
         self._syncing = False
         self._sync_build_buttons()
         self.btn_end.config(state="disabled" if g.game_over else "normal")
+        self._sync_clock()
 
     def _kind_cost(self, kind: str) -> float:
         """按钮上标注的基础造价（未含地形乘数，用作可负担性判断的下界）。"""
@@ -1809,7 +1978,7 @@ class App(tk.Tk):
         g = self.game
         for step in POLICY_SCHEDULE:
             if step.turn > g.turn:
-                return (f"第 {step.turn} 回合起：碳税 {step.carbon_tax:.0f}元/t、"
+                return (f"第 {step.turn} 季度起：碳税 {step.carbon_tax:.0f}元/t、"
                         f"新能源配额 {step.renewable_quota:.0%}、电价上限 {step.price_cap:.0f}")
         return "已到最终监管档位"
 
@@ -1957,12 +2126,12 @@ RULES = """《电力公司》玩法与规则
   地形/资源 → 建电厂与电网 → 定电价抢客户 → 季度结算出财报
           → 财报决定股价 → 股价决定收购成本与风险 → 收购对手扩张
 
-二、每回合你要做的四件事
+二、每个季度你要做的四件事
   1. 看环境：需求、煤价/铀价、政策、对手财报与股价（左侧【政策】）
   2. 调资产：建电厂/变电站/线路/矿，招人或裁员，借款或还款（左侧【公司】→ 运营）
   3. 定电价：居民与工业分开定价（左侧【公司】→ 运营）
   4. 股市：买对手、回购自家、控股后抽血或合并（左侧【股市】）
-  最后点右上【结束回合】。
+  调好后按空格继续时间，或点右上【跳到季末】直接结算。
 
 三、必须理解的机制
   1. 固定成本照扣
@@ -1982,7 +2151,7 @@ RULES = """《电力公司》玩法与规则
      份额按「(市场均价/你的价)^弹性 × 口碑」分配，但每家拿到的份额不超过它的可交付容量。
      想抢份额，必须先建产能；只降价不建厂没有意义。
   5. 掠夺定价与反垄断
-     把价格压到单位成本以下、同时份额超过 55%，连续 3 个回合会被罚 6000 万并禁止收购 2 回合。
+     把价格压到单位成本以下、同时份额超过 55%，连续 3 个季度会被罚 6000 万并禁止收购 180 天。
   6. 财报 → 股价
      股价 = 滚动四季度 EPS × PE + 净资产锚定。市占率、负债率、口碑、事故会调整 PE。
      亏损会把股价打到净资产以下——那正是你被收购的窗口。
@@ -2000,12 +2169,15 @@ RULES = """《电力公司》玩法与规则
 五、上手建议
   1. 先在临江站稳：建变电站 + 一座电厂就能吃下本地需求，再考虑买北岭。
   2. 头 4 个季度没有碳税，抓紧用火电攒现金流，但别把装机堆到需求的 1.5 倍以上。
-  3. 第 5 回合开始有碳税与新能源配额，提前铺光伏（荒漠/平原）。
+  3. 第 5 季度开始有碳税与新能源配额，提前铺光伏（荒漠/平原）。
   4. 看到对手股价跌到净资产 60% 以下就买；先到 51% 抽血，再到 75% 合并。
   5. 永远留一笔现金：风暴、罢工、煤价暴涨随时可能砸穿你的现金流。
 
-六、快捷键
-  Ctrl+Enter：结束回合
+六、时间与快捷键
+  季度 90 天，1x 每天约 1.5 秒；可切换 1x / 2x / 4x。
+  进入建造模式、打开侧栏、城市总览、季报、重大负面事件、现金为负会自动暂停。
+  空格 或 Ctrl+Enter：暂停 / 继续
+  Esc：退出建造模式或关闭侧栏
 """
 
 

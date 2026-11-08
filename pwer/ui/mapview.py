@@ -614,7 +614,7 @@ class MapView(ttk.Frame):
             pr = next((p for p in game.companies[t.owner].projects
                        if p.x == t.x and p.y == t.y), None)
             if pr:
-                c.create_text(cx, y0 + ts * 0.30, text=f"建{pr.turns_left}", fill=UI_YELLOW,
+                c.create_text(cx, y0 + ts * 0.30, text=f"建{pr.days_left}天", fill=UI_YELLOW,
                               font=("Microsoft YaHei UI", -int(ts * 0.20), "bold"))
 
 
