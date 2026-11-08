@@ -86,10 +86,13 @@ class Game:
 
     # ------------------------------------------------------------ 构造
     @classmethod
-    def new_game(cls, seed: int | None = None, world: "WorldMap | None" = None) -> "Game":
+    def new_game(cls, seed: int | None = None, world: "WorldMap | None" = None,
+                 company_name: str | None = None,
+                 account_name: str | None = None) -> "Game":
         """开一局新游戏。seed 为空就随机取一个（想复现就把种子记下来）。
 
         `world` 可以塞一张现成的地图（测试里复用，省掉每次 1.5s 的生成）。
+        公司名/账户名来自启动页的命名页；为空时沿用默认的“盛阳电力 / CEO”。
         """
         if seed is None:
             seed = random.SystemRandom().randrange(1, 2 ** 31 - 1)
@@ -104,8 +107,8 @@ class Game:
         g._refresh_market()
         g.log_lines = []
         g.messages = []
-        g._build_companies()
-        g.log("=== 《电力公司》开局：你接手了一家地方电力公司 ===")
+        g._build_companies(company_name=company_name, account_name=account_name)
+        g.log(f"=== 《电力公司》开局：{g.player.name} 开始经营 ===")
         g.log(f"现金 {money(g.player.cash)} · 负债 {money(g.player.debt)} · "
               f"装机 {g.player.gen_capacity():.0f}MW · 员工 {g.player.ops_staff} 班组")
         return g
@@ -130,14 +133,18 @@ class Game:
         return f"第 {self.turn} 回合 · {self.year_of()}年{s}季"
 
     # ------------------------------------------------------------ 初始化公司
-    def _build_companies(self) -> None:
+    def _build_companies(self, company_name: str | None = None,
+                         account_name: str | None = None) -> None:
+        player_name = (company_name or "").strip() or "盛阳电力"
+        player_account = (account_name or "").strip() or "CEO"
         defs = [
-            ("盛阳电力", 0, "#4fa3ff", True, self.world.cities[0]),
+            (player_name, 0, "#4fa3ff", True, self.world.cities[0]),
             ("北岭能源", 1, "#e0605e", False, self.world.cities[1]),
             ("滨海控股", 2, "#57c785", False, self.world.cities[3]),
         ]
         for name, idx, _color, is_player, city in defs:
-            co = Company(idx=idx, name=name, is_player=is_player)
+            co = Company(idx=idx, name=name, is_player=is_player,
+                         account_name=player_account if is_player else "")
             co.cash = 80_000.0 if is_player else 46_000.0
             co.debt = 20_000.0 if is_player else 12_000.0
             co.ops_staff = 16 if is_player else 10
