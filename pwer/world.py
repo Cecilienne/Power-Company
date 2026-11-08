@@ -393,6 +393,9 @@ class WorldMap:
         for i in range(n):
             if kind[i]:
                 continue
+            # 山地只允许线路跨越；电厂/矿/变电站不计入可建数
+            if terr[i] == _T_IDX[Terrain.HILL]:
+                continue
             m = mask_by_terr[terr[i]]
             if not m:
                 continue
@@ -408,9 +411,11 @@ class WorldMap:
             self._buildable_cache[k] = counts[j]
 
         self._buildable_cache["coal_mine"] = sum(
-            1 for x, y in self.coal_spots if not self.kind[y * w + x])
+            1 for x, y in self.coal_spots
+            if not self.kind[y * w + x] and terr[y * w + x] != _T_IDX[Terrain.HILL])
         self._buildable_cache["uranium_mine"] = sum(
-            1 for x, y in self.uranium_spots if not self.kind[y * w + x])
+            1 for x, y in self.uranium_spots
+            if not self.kind[y * w + x] and terr[y * w + x] != _T_IDX[Terrain.HILL])
         # 线路哪儿都能铺（除了被占的格子）
         self._buildable_cache["line"] = n - sum(1 for k in kind if k)
         # 变电站只在城圈里；四座城 × 25 格足够，恒 >0
@@ -432,6 +437,9 @@ class WorldMap:
             return False, "该地块已被占用"
 
         terrain = _T_ORDER[ti]
+        # 山地不可建（输电线路可跨越，保证城市不会被山脊隔断）
+        if terrain is Terrain.HILL and kind != "line":
+            return False, "山地不可建设"
         if kind in PLANT_SPECS:
             spec = PLANT_SPECS[kind]
             if terrain not in spec.terrains:

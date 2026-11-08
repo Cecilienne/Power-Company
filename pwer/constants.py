@@ -97,30 +97,30 @@ class PlantSpec:
 PLANT_SPECS: dict[str, PlantSpec] = {
     "coal": PlantSpec(
         "coal", "燃煤电厂", "煤", 300, 300, 7.0, 224, 0.85, 2, 0.78, 0.05, 8, 2,
-        True, (Terrain.PLAIN, Terrain.HILL, Terrain.RIVER, Terrain.COAST),
-        "coal", 0.32, "#6b6055",
+        True, (Terrain.PLAIN, Terrain.RIVER, Terrain.COAST),
+        "coal", 0.32, "#6B625A",
     ),
     "gas": PlantSpec(
         "gas", "燃气电站", "气", 100, 185, 5.0, 380, 0.40, 1, 0.55, 0.10, 3, 1,
-        False, (Terrain.PLAIN, Terrain.HILL, Terrain.DESERT, Terrain.RIVER, Terrain.COAST),
-        "", 0.0, "#8c7bb0",
+        False, (Terrain.PLAIN, Terrain.DESERT, Terrain.RIVER, Terrain.COAST),
+        "", 0.0, "#7D7590",
     ),
     "hydro": PlantSpec(
         "hydro", "水电站", "水", 150, 600, 6.5, 10, 0.0, 3, 0.50, 0.18, 5, 2,
-        True, (Terrain.RIVER,), "", 0.0, "#3f7fb5", renewable=True, life_q=120,
+        True, (Terrain.RIVER,), "", 0.0, "#4E7896", renewable=True, life_q=120,
     ),
     "wind": PlantSpec(
         "wind", "风电场", "风", 100, 300, 6.5, 2, 0.0, 2, 0.30, 0.22, 2, 1,
-        False, (Terrain.HILL, Terrain.COAST, Terrain.PLAIN), "", 0.0, "#5fa8a0",
+        False, (Terrain.COAST, Terrain.PLAIN), "", 0.0, "#6C9692",
         renewable=True, life_q=60,
     ),
     "solar": PlantSpec(
         "solar", "光伏电站", "光", 80, 300, 6.5, 1, 0.0, 1, 0.19, 0.12, 1, 1,
-        False, (Terrain.DESERT, Terrain.PLAIN), "", 0.0, "#d8b74a", renewable=True, life_q=60,
+        False, (Terrain.DESERT, Terrain.PLAIN), "", 0.0, "#B5A36A", renewable=True, life_q=60,
     ),
     "nuclear": PlantSpec(
         "nuclear", "核电站", "核", 600, 750, 12.0, 60, 0.02, 5, 0.90, 0.02, 20, 4,
-        True, (Terrain.RIVER, Terrain.COAST), "uranium", 0.02, "#b25f8f",
+        True, (Terrain.RIVER, Terrain.COAST), "uranium", 0.02, "#9A6A88",
         life_q=120, approval=True,
     ),
 }
@@ -140,10 +140,10 @@ class InfraSpec:
 
 
 INFRA_SPECS: dict[str, InfraSpec] = {
-    "substation": InfraSpec("substation", "变电站", "变", 8_000, 1, 1, 2, 180, "#e8e2d0"),
-    "line": InfraSpec("line", "输电线路", "线", 1_200, 1, 1, 1, 220, "#9fd0ff"),
-    "coal_mine": InfraSpec("coal_mine", "煤矿", "煤", 55_000, 2, 2, 4, 0, "#2f2f2f"),
-    "uranium_mine": InfraSpec("uranium_mine", "铀矿", "铀", 42_000, 2, 2, 3, 0, "#7fc07f"),
+    "substation": InfraSpec("substation", "变电站", "变", 8_000, 1, 1, 2, 180, "#D8D5CB"),
+    "line": InfraSpec("line", "输电线路", "线", 1_200, 1, 1, 1, 220, "#8FB0C8"),
+    "coal_mine": InfraSpec("coal_mine", "煤矿", "煤", 55_000, 2, 2, 4, 0, "#2B2B2B"),
+    "uranium_mine": InfraSpec("uranium_mine", "铀矿", "铀", 42_000, 2, 2, 3, 0, "#7FA08A"),
 }
 
 # 矿区单季度产出上限与开采成本
@@ -244,38 +244,53 @@ GREEN_CARBON_INTENSITY = 0.18   # t/MWh
 GREEN_RENEWABLE = 0.55
 
 # ---------------------------------------------------------------- 颜色（UI）
-# 与启动页同一套瑞士风格色板：黑底 + 白字 + 蓝/红/黄三色块，绿色只做"正常"状态。
-# 游戏内界面不再自造灰蓝色系（旧值是 #1d2026/#262a33/#4fa3ff，与启动页两套皮）。
-UI_BG = "#0B0B0C"          # 画布底
-UI_PANEL = "#14151A"       # 面板 / 抽屉
-UI_PANEL2 = "#1A1C22"      # 面板内的二级块（标题条、列表底）
-UI_HOVER = "#24262E"       # 悬停底
-UI_RULE = "#26262B"        # 1px 分隔线
-UI_TEXT = "#F4F2EC"
-UI_DIM = "#A6A6AC"
-UI_DIM2 = "#55555C"
-UI_BLUE = "#21449C"        # 数据块 / 选中（与标题块同色）
-UI_RED = "#E1251B"         # 主行动 / 危险
-UI_YELLOW = "#F2E600"      # 强调数字 / 选中强调
-UI_SEL = "#21449C"         # 列表选中行底色
-UI_ACCENT = UI_YELLOW
-UI_GOOD = "#35C15A"
-UI_BAD = "#E1251B"
-UI_WARN = "#F2E600"
-COMPANY_COLORS = ("#4FA3FF", "#E1251B", "#35C15A", "#F2E600")
+# 单一主题：黑底 + 低饱和深蓝 UI。所有界面共用这一套，不再做主题切换。
+# 蓝色负责结构/选中/主行动，红色只保留给危险与"跌"，绿色只保留给正常/盈利。
+UI_BG = "#1F1F1F"          # 画布底 / 可建区
+UI_PANEL = "#101720"       # 面板 / 抽屉
+UI_PANEL2 = "#16202B"      # 面板内的二级块（标题条、列表底）
+UI_HOVER = "#1D2A38"       # 悬停底
+UI_RULE = "#26323F"        # 1px 分隔线
+UI_TEXT = "#E7E4DC"
+UI_DIM = "#98A1AB"
+UI_DIM2 = "#545E69"
+UI_BLUE = "#0B3C74"        # 深蓝：主行动 / 时间块 / 选中
+UI_BLUE_HI = "#0B3C74"     # 深蓝的悬停档
+UI_RED = "#C43E32"         # 低饱和砖红：危险 / 下跌
+UI_YELLOW = "#FFD557"      # 低饱和黄铜：警告
+UI_SEL = "#29445C"         # 列表选中行底色
+UI_ACCENT = "#52B5FC"      # 低饱和浅蓝：数据标题 / 强调
+UI_GOOD = "#4EFA93"        # 低饱和灰绿：正常 / 盈利
+UI_BAD = UI_RED
+UI_WARN = UI_YELLOW
+COMPANY_COLORS = ("#6F93B3", "#C43E32", "#4EFA93", "#B3A067")
+
+# ---------------------------------------------------------------- 地图（单一主题）
+MAP_BUILD = "#1F1F1F"          # 可建区 = 黑底
+MAP_MOUNTAIN = "#C43E32"       # 山地：低饱和砖红，不可建
+MAP_MOUNTAIN_DARK = "#5E3631"
+MAP_WATER = "#3C7195"          # 水域：低饱和深蓝
+MAP_WATER_DARK = "#24455C"
+MAP_GRID = "#5E7894"
+MAP_SELECT = "#C9DCEA"
 
 # ---------------------------------------------------------------- 版本 / 启动页
 VERSION = "1.1.1"
-BUILD = "2026.11.01"
+BUILD = "2026"
 MULTIPLAYER_READY = False      # 联机模块尚未接入；启动页状态灯按这个值说话，不写死"可联机"
 
-# 启动页（docs/ui_start_screen.md 的色板；只属于 UI，不参与游戏数值）
-UI_START_BG = "#0B0B0C"
-UI_START_INK = "#F4F2EC"
-UI_START_DIM1 = "#A6A6AC"
-UI_START_DIM2 = "#55555C"
-UI_START_RULE = "#26262B"
-UI_START_BLUE = "#21449C"
-UI_START_RED = "#E1251B"
-UI_START_YELLOW = "#F2E600"
-UI_START_GREEN = "#35C15A"
+# 启动页色板（只属于 UI，不参与游戏数值）
+UI_START_BG = "#1F1F1F"
+UI_START_INK = "#E7E4DC"
+UI_START_DIM1 = "#98A1AB"
+UI_START_DIM2 = "#545E69"
+UI_START_RULE = "#26323F"
+UI_START_BLUE = "#0B3C74"
+UI_START_BLUE_HI = "#0B3C74"
+UI_START_PANEL = "#0B3C74"
+UI_START_PANEL2 = "#0B3C74"
+UI_START_PANEL_RULE = "#0B3C74"
+UI_START_ACCENT = "#52B5FC"
+UI_START_RED = "#C43E32"
+UI_START_YELLOW = "#FFD557"
+UI_START_GREEN = "#4EFA93"

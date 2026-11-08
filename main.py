@@ -2,7 +2,7 @@
 
     python main.py                 # 启动图形界面：先进启动页，点【开始】进游戏
     python main.py --seed 2026     # 指定地图/随机种子
-    python main.py --selftest      # 无窗口自检（打包后验证 exe 是否完整）
+    python main.py --selftest      # 无窗口自检（引擎 + tkinter）
     python main.py --audio-test    # 只验背景音乐：响 3 秒，放不出来会写原因
 """
 from __future__ import annotations
@@ -15,10 +15,7 @@ import time
 def _tcl_headless_ok(say) -> bool:
     """没有图形环境时的兜底检查。
 
-    CI 的 Windows runner 跑在无桌面的会话里，Tk() 建不了窗，但这不代表
-    打包坏了 —— 真正要保证的是 tcl/tk 的运行时数据文件齐全。
-    tkinter.Tcl() 会真的去加载 tcl 库并跑 init.tcl，缺文件会直接抛异常，
-    所以它能替我们证明「tcl/tk 数据被完整打进产物」。
+    Tk() 建不了窗时，用 Tcl() 加载 tcl 库并跑 init.tcl；缺运行库会直接抛异常。
     """
     try:
         import tkinter
@@ -33,10 +30,9 @@ def _tcl_headless_ok(say) -> bool:
 
 
 def selftest() -> int:
-    """不打开窗口，验证引擎与 tkinter 都在打包产物里。
+    """不打开窗口，验证引擎与 tkinter 可用。
 
-    注意：PyInstaller --windowed 打包后没有控制台，sys.stdout 可能为 None，
-    所以结果同时写到 exe 同目录的 selftest.log。
+    没有控制台时 sys.stdout 可能为 None，所以结果同时写到 selftest.log。
     """
     lines: list[str] = []
     code = 0
@@ -73,7 +69,7 @@ def selftest() -> int:
         lines.append(traceback.format_exc())
         code = 3
 
-    # 真正建一次界面：验证 tcl/tk 数据文件是否被完整打包
+    # 真正建一次界面：验证 tcl/tk 能建窗
     if code == 0:
         try:
             from pwer.ui.app import App
@@ -85,7 +81,7 @@ def selftest() -> int:
             say("自检通过")
         except Exception as e:  # noqa: BLE001
             # 建不了窗可能是「没有桌面」（CI / 服务账号 / 某些远程会话），
-            # 也可能真的打坏了。用 Tcl() 区分这两种情况。
+            # 也可能是 Tk 运行库缺失。用 Tcl() 区分这两种情况。
             if _tcl_headless_ok(say):
                 say(f"界面跳过：{type(e).__name__}: {e}")
                 say("自检通过（headless：tcl/tk 数据完整，未验证建窗）")
