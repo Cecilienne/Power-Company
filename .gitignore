@@ -18,3 +18,13 @@ assets/
 Thumbs.db
 desktop.ini
 .DS_Store
+# ---- 其他 ----
+*.tmp
+
+#音频
+*.wav
+*.mp4
+
+# ---- 其他工具 ----
+tools/
+build_tools/
