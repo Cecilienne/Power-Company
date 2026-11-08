@@ -21,6 +21,10 @@ from dataclasses import dataclass, field
 from . import ai as ai_mod
 from .company import Company, Mine, Plant, Project
 from .constants import (
+    AI_CITY_DEFS,
+    CITY_DEFS,
+    CITY_LICENSE_COST,
+    CITY_LICENSE_REP,
     COMMODITY_BASE,
     COMMODITY_MAX,
     COMMODITY_MIN,
@@ -31,12 +35,16 @@ from .constants import (
     GREEN_RENEWABLE,
     HIRE_COST,
     INFRA_SPECS,
+    INTERCITY_LINK_CAP,
+    INTERCITY_LINK_COST,
+    INTERCITY_LINK_LOSS,
     LOAN_LIMIT_RATIO,
     LOAN_RATE,
     MAX_TURNS,
     MINE_COST_PER_T,
     MINE_OUTPUT,
     PLANT_SPECS,
+    SAVE_VERSION,
     SEASON_NAMES,
     START_CEO_CASH,
     WIN_SHARE,
@@ -59,10 +67,23 @@ def _find_tile(world: WorldMap, kind: str, cx: int, cy: int, max_r: int = 14):
 
 
 @dataclass
+class InterCityLink:
+    a: int
+    b: int
+    capacity: float = INTERCITY_LINK_CAP
+    loss: float = INTERCITY_LINK_LOSS
+
+
+@dataclass
 class Game:
     seed: int = 20240501
     rng: random.Random = field(default_factory=random.Random)
     world: WorldMap = field(default_factory=WorldMap)
+    cities: list[City] = field(default_factory=list)
+    worlds: list[WorldMap | None] = field(default_factory=list)
+    current_city: int = 0
+    links: list[InterCityLink] = field(default_factory=list)
+    version: int = SAVE_VERSION
     companies: list[Company] = field(default_factory=list)
     player_idx: int = 0
     turn: int = 1
@@ -98,7 +119,24 @@ class Game:
             seed = random.SystemRandom().randrange(1, 2 ** 31 - 1)
         g = cls(seed=seed)
         g.rng = random.Random(seed)
-        g.world = world if world is not None else WorldMap.generate(seed)
+        w0 = world if world is not None else WorldMap.generate(seed, city_idx=0)
+        g.worlds = [w0, None]
+        g.world = w0
+        g.current_city = 0
+        c0 = w0.cities[0] if w0.cities else City(0, CITY_DEFS[0][0], -1, -1, CITY_DEFS[0][1])
+        c0.owner = 0
+        c0.unlocked = True
+        c0.base_mw = c0.base_mw or CITY_DEFS[0][1]
+        c0.demand_mw = c0.base_mw
+        c1 = City(1, CITY_DEFS[1][0], -1, -1, CITY_DEFS[1][1])
+        c1.demand_mw = c1.base_mw
+        g.cities = [c0, c1]
+        for i, (name, base, owner) in enumerate(AI_CITY_DEFS):
+            c = City(100 + i, name, -1, -1, base, ai=True, owner=owner, unlocked=True)
+            c.demand_mw = base
+            g.cities.append(c)
+        for c in g.cities:
+            c.refresh_split(0.42)
         g.policy = policy_for_turn(1)
         g.market_raw = dict(COMMODITY_BASE)
         g.commodity_mod = {"coal": 1.0, "uranium": 1.0}
@@ -122,7 +160,128 @@ class Game:
         return self.companies[self.player_idx]
 
     def total_demand(self) -> float:
-        return sum(c.demand_mw for c in self.world.cities)
+        return sum(c.demand_mw for c in self.cities)
+
+    # ------------------------------------------------------------ 多城市
+    def city_state(self, city_id: int) -> City | None:
+        for c in self.cities:
+            if c.idx == city_id:
+                return c
+        return None
+
+    def world_for_city(self, city_id: int) -> WorldMap | None:
+        if city_id in (0, 1):
+            worlds = getattr(self, "worlds", None) or []
+            if city_id < len(worlds) and worlds[city_id] is not None:
+                return worlds[city_id]
+            if city_id == self.current_city:
+                return self.world
+        return None
+
+    def ensure_city_world(self, idx: int) -> WorldMap | None:
+        """懒生成第二座可玩城市；AI 城市没有地图。"""
+        if idx not in (0, 1):
+            return None
+        if not getattr(self, "worlds", None):
+            self.worlds = [self.world, None]
+        w = self.world_for_city(idx)
+        if w is not None:
+            return w
+        old = self.city_state(idx)
+        w = WorldMap.generate(self.seed + idx * 7919, city_idx=idx)
+        if old is not None and w.cities:
+            c = w.cities[0]
+            c.owner = old.owner
+            c.unlocked = old.unlocked
+            c.base_mw = old.base_mw
+            c.demand_mw = old.demand_mw
+            c.served = dict(old.served)
+            c.share = dict(old.share)
+            c.outage_mw = old.outage_mw
+            c.growth = old.growth
+            self.cities[idx] = c
+        self.worlds[idx] = w
+        if idx == self.current_city:
+            self.world = w
+        return w
+
+    def switch_city(self, idx: int) -> tuple[bool, str]:
+        c = self.city_state(idx)
+        if c is None or c.ai:
+            return False, "这座城市没有可进入的地图"
+        if c.owner != self.player_idx:
+            return False, "尚未取得该城市经营权"
+        if idx == self.current_city:
+            return True, ""
+        w = self.ensure_city_world(idx)
+        if w is None:
+            return False, "城市地图生成失败"
+        self.world = w
+        self.current_city = idx
+        self.city_cap = {}
+        self.log(f"镜头进入 {c.name}，开始经营这座城市")
+        return True, ""
+
+    def buy_city(self, idx: int) -> tuple[bool, str]:
+        c = self.city_state(idx)
+        if c is None or c.ai:
+            return False, "这座城市不可购买"
+        if c.owner == self.player_idx:
+            return False, "你已经拥有这座城市的经营权"
+        if c.owner not in (-1,):
+            return False, "这座城市已被其他公司买断"
+        if self.player.reputation < CITY_LICENSE_REP:
+            return False, f"声望不足（需 {CITY_LICENSE_REP:.0f}）"
+        if self.player.cash < CITY_LICENSE_COST:
+            return False, f"现金不足（需 {money(CITY_LICENSE_COST)}）"
+        self.player.cash -= CITY_LICENSE_COST
+        c.owner = self.player_idx
+        c.unlocked = True
+        self.log(f"{self.player.name} 以 {money(CITY_LICENSE_COST)} 取得 {c.name} 的经营权")
+        return True, ""
+
+    def has_substation(self, city_id: int, owner: int) -> bool:
+        w = self.world_for_city(city_id)
+        if w is None:
+            w = self.ensure_city_world(city_id)
+        c = self.city_state(city_id)
+        if w is None or c is None or c.x < 0:
+            return False
+        for y in range(max(0, c.y - CITY_RADIUS - 2), min(w.h, c.y + CITY_RADIUS + 3)):
+            for x in range(max(0, c.x - CITY_RADIUS - 2), min(w.w, c.x + CITY_RADIUS + 3)):
+                t = w.tile(x, y)
+                if t.kind == "substation" and t.owner == owner:
+                    return True
+        return False
+
+    def build_intercity_link(self, a: int, b: int) -> tuple[bool, str]:
+        if a == b:
+            return False, "不能连接同一座城市"
+        for ln in self.links:
+            if {ln.a, ln.b} == {a, b}:
+                return False, "这两座城市之间已有跨城线路"
+        for cid in (a, b):
+            c = self.city_state(cid)
+            if c is None or c.ai or c.owner != self.player_idx:
+                return False, "两座城市都必须由你拥有"
+            if not self.has_substation(cid, self.player_idx):
+                return False, f"{c.name} 还没有变电站"
+        if self.player.cash < INTERCITY_LINK_COST:
+            return False, f"现金不足（需 {money(INTERCITY_LINK_COST)}）"
+        self.player.cash -= INTERCITY_LINK_COST
+        self.links.append(InterCityLink(a, b))
+        self.log(f"{self.player.name} 建成跨城线路（{self.city_state(a).name}—{self.city_state(b).name}），"
+                 f"容量 {INTERCITY_LINK_CAP:.0f}MW，线损 {INTERCITY_LINK_LOSS:.0%}")
+        return True, ""
+
+    def city_capacity(self, co: Company, city_id: int) -> float:
+        caps = self.city_cap.get(co.idx)
+        if caps is not None:
+            return caps.get(city_id, 0.0)
+        w = self.world_for_city(city_id)
+        if w is not None:
+            return sum(p.cap for p in co.plants if p.online and p.city == city_id and p.x >= 0)
+        return sum(p.cap for p in co.plants if p.online and p.city == city_id and p.x < 0)
 
     def year_of(self, turn: int | None = None) -> int:
         t = self.turn if turn is None else turn
@@ -138,9 +297,9 @@ class Game:
         player_name = (company_name or "").strip() or "盛阳电力"
         player_account = (account_name or "").strip() or "CEO"
         defs = [
-            (player_name, 0, "#4fa3ff", True, self.world.cities[0]),
-            ("北岭能源", 1, "#e0605e", False, self.world.cities[1]),
-            ("滨海控股", 2, "#57c785", False, self.world.cities[3]),
+            (player_name, 0, "#4fa3ff", True, self.cities[0]),
+            ("北岭能源", 1, "#e0605e", False, None),
+            ("滨海控股", 2, "#57c785", False, None),
         ]
         for name, idx, _color, is_player, city in defs:
             co = Company(idx=idx, name=name, is_player=is_player,
@@ -154,10 +313,11 @@ class Game:
             co.res_price = 500.0
             co.ind_price = 460.0
             self.companies.append(co)
-        # 起始资产
-        self._starter_site(self.companies[0], self.world.cities[0], ("coal", "gas"))
-        self._starter_site(self.companies[1], self.world.cities[1], ("coal",))
-        self._starter_site(self.companies[2], self.world.cities[3], ("coal", "gas"))
+        # 起始资产：玩家在第一座城市有真实地块；AI 在离屏城市有抽象机组
+        self._starter_site(self.companies[0], self.cities[0], ("coal", "gas"))
+        for co, city_id in ((self.companies[1], 100), (self.companies[2], 101)):
+            co.home_city = city_id
+            self._seed_ai_fleet(co, self.city_state(city_id))
         for co in self.companies:
             equity = max(1.0, co.equity())
             co.shares = round(equity / 12.0, 1)
@@ -180,6 +340,7 @@ class Game:
             pid = self.next_id()
             p = Plant(pid, kind, spot[0], spot[1], co.idx, spec.cap,
                       capex=spec.capex_per_mw * spec.cap * 1.0,
+                      city=city.idx,
                       book_value=spec.capex_per_mw * spec.cap, life_q=spec.life_q)
             co.plants.append(p)
             t = self.world.tile(*spot)
@@ -193,6 +354,19 @@ class Game:
         t = self.world.tile(*sub)
         t.owner, t.kind, t.ref = co.idx, "substation", self.next_id()
         self._connect(co, co.plants[0].x, co.plants[0].y, sub[0], sub[1])
+
+    def _seed_ai_fleet(self, co: Company, city: City | None) -> None:
+        """AI 的机组不在任何地图上，只作为离屏容量参与全市场结算。"""
+        if city is None:
+            return
+        kinds = ("coal", "gas") if co.idx == 1 else ("gas", "coal")
+        for kind in kinds:
+            spec = PLANT_SPECS[kind]
+            pid = self.next_id()
+            capex = spec.capex_per_mw * spec.cap
+            p = Plant(pid, kind, -1, -1, co.idx, spec.cap, capex=capex,
+                      city=city.idx, book_value=capex, life_q=spec.life_q)
+            co.plants.append(p)
 
     def _connect(self, co: Company, ax: int, ay: int, bx: int, by: int) -> None:
         """沿 L 形路径铺输电线路，保证电厂与变电站连通。"""
@@ -236,6 +410,9 @@ class Game:
         return self.build_cost(co, kind, x, y) + self.world.land_cost(x, y)
 
     def can_build(self, co: Company, kind: str, x: int, y: int) -> tuple[bool, str]:
+        city = self.city_state(self.current_city)
+        if city is None or city.owner != co.idx:
+            return False, "尚未取得该城市经营权"
         ok, why = self.world.check_build(kind, x, y)
         if not ok:
             return False, why
@@ -267,7 +444,7 @@ class Game:
             teams = spec.teams
         pid = self.next_id()
         pr = Project(pid, kind, x, y, co.idx, capex=capex, turns_total=turns,
-                     turns_left=turns, spent=capex, teams=teams)
+                     turns_left=turns, spent=capex, teams=teams, city=self.current_city)
         co.projects.append(pr)
         t = self.world.tile(x, y)
         t.owner, t.kind, t.ref = co.idx, kind, -pid - 1
@@ -332,13 +509,14 @@ class Game:
                     self._complete(co, pr)
 
     def _complete(self, co: Company, pr: Project) -> None:
-        tile = self.world.tile(pr.x, pr.y)
+        w = self.world_for_city(pr.city) or self.world
+        tile = w.tile(pr.x, pr.y)
         co.projects.remove(pr)
         if pr.kind in PLANT_SPECS:
             spec = PLANT_SPECS[pr.kind]
             pid = self.next_id()
             p = Plant(pid, pr.kind, pr.x, pr.y, co.idx, spec.cap, pr.capex,
-                      build_turn=self.turn, book_value=pr.capex, life_q=spec.life_q)
+                      city=pr.city, build_turn=self.turn, book_value=pr.capex, life_q=spec.life_q)
             co.plants.append(p)
             tile.ref = p.id
             self.log(f"✔ {co.name} 的{spec.name}（{spec.cap:.0f}MW）投产，"
@@ -348,7 +526,7 @@ class Game:
             reserve = tile.coal if pr.kind == "coal_mine" else tile.uranium
             m = Mine(mid, pr.kind, pr.x, pr.y, co.idx, pr.capex, pr.capex,
                      reserve=reserve, output=MINE_OUTPUT[pr.kind],
-                     cost_per_t=MINE_COST_PER_T[pr.kind], build_turn=self.turn)
+                     cost_per_t=MINE_COST_PER_T[pr.kind], city=pr.city, build_turn=self.turn)
             co.mines.append(m)
             tile.ref = mid
             self.log(f"✔ {co.name} 的{INFRA_SPECS[pr.kind].name}投产，"
@@ -522,7 +700,7 @@ class Game:
         self.policy = policy_for_turn(self.turn)
         self.demand_shock = 1.0
         self.weather = {"rain": 1.0, "wind": 1.0, "solar": 1.0, "heat": 1.0}
-        for city in self.world.cities:
+        for city in self.cities:
             city.base_mw *= 1.0 + city.growth
         self._walk_market()
         for co in self.companies:

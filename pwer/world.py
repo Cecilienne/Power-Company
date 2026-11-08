@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, Optional
 
 from .constants import (
+    CITY_DEFS,
     INFRA_SPECS,
     LAND_COST,
     MINE_RESERVE,
@@ -57,6 +58,10 @@ class City:
     served: dict[int, float] = field(default_factory=dict)   # 公司 -> 实际供电 MW
     share: dict[int, float] = field(default_factory=dict)    # 公司 -> 份额
     outage_mw: float = 0.0
+    # 多城市：AI 城市没有地图（x=y=-1），只参与全市场结算
+    ai: bool = False
+    owner: int = -1            # 拥有经营权的公司 idx；-1 表示未售出
+    unlocked: bool = False
 
     def refresh_split(self, res_ratio: float) -> None:
         self.residential = self.demand_mw * res_ratio
@@ -318,10 +323,16 @@ class WorldMap:
 
     # ------------------------------------------------------------ 生成
     @classmethod
-    def generate(cls, seed: int = 20240501) -> "WorldMap":
-        """粗网格（契约管线）→ 细网格：地形、矿、风光、城址都从这里来。"""
+    def generate(cls, seed: int = 20240501, city_idx: int = 0) -> "WorldMap":
+        """粗网格（契约管线）→ 细网格：地形、矿、风光、城址都从这里来。
+
+        city_idx 是全局城市编号（0/1 为可玩城市）。一张地图只保留一座城市，
+        其余候选城址不落地，所以每个城市都有自己的独立地图。
+        """
         from . import worldgen
 
+        if not 0 <= city_idx < len(CITY_DEFS):
+            raise ValueError(f"invalid city_idx {city_idx}")
         data = worldgen.generate_fine(GRID_W, GRID_H, seed)
         wm = cls(data["w"], data["h"])
         wm.terr[:] = data["terrain"]
@@ -338,18 +349,16 @@ class WorldMap:
         wm.city_candidates = [dict(c) for c in data["city_candidates"]]
         wm.rivers = [list(p) for p in data["rivers"]]
 
-        # 城址：候选从大到小，越大的平原给越大的用电基数
-        names = (("临江", 700.0), ("北岭", 560.0), ("钢城", 420.0), ("滨海", 300.0))
-        for idx, (name, base_mw) in enumerate(names):
-            if idx >= len(wm.city_candidates):
-                break
-            cand = wm.city_candidates[idx]
+        # 一张地图只落地一座城：候选 0 通常是最大的平原，最像主城区。
+        name, base_mw = CITY_DEFS[city_idx]
+        if wm.city_candidates:
+            cand = wm.city_candidates[0]
             cx, cy = int(cand["x"]), int(cand["y"])
             i = cy * wm.w + cx
             wm.terr[i] = _T_IDX[Terrain.CITY]
             wm.flags[i] &= ~FLAG_WATER & 0xFF
             wm.kind[i] = "city"
-            c = City(idx, name, cx, cy, base_mw)
+            c = City(city_idx, name, cx, cy, base_mw)
             c.demand_mw = base_mw
             wm.cities.append(c)
 

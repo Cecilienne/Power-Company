@@ -68,7 +68,7 @@ def update_price(co: Company, rng: random.Random) -> None:
 
 
 def update_all_prices(game) -> None:
-    total = sum(c.demand_mw for c in game.world.cities) or 1.0
+    total = sum(c.demand_mw for c in game.cities) or 1.0
     for co in game.companies:
         if not co.alive or co.delisted:
             continue

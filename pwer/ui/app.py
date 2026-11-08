@@ -16,12 +16,18 @@ from .. import audio, ma, paths, world
 from ..company import Company
 from ..constants import (
     ANTITRUST_SHARE,
+    CITY_LICENSE_COST,
+    CITY_LICENSE_REP,
     COMPANY_COLORS,
     DIVIDEND_MAX,
     INFRA_SPECS,
+    INTERCITY_LINK_CAP,
+    INTERCITY_LINK_COST,
+    INTERCITY_LINK_LOSS,
     LOAN_LIMIT_RATIO,
     PLANT_SPECS,
     POLICY_SCHEDULE,
+    SAVE_VERSION,
     TERRAIN_INFO,
     UI_ACCENT,
     UI_BAD,
@@ -137,6 +143,11 @@ class App(tk.Tk):
         self._bind_keys()
         self.game = Game.new_game(self._seed, company_name=company_name,
                                  account_name=account_name)
+        self.build_mode = None
+        self.map.build_mode = None
+        self.map.valid_tiles = set()
+        self.map.manual = False
+        self.selected = None
         self.refresh()
         self._fit_map()
         if not os.environ.get("PWER_NO_INTRO"):
@@ -151,6 +162,7 @@ class App(tk.Tk):
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
+        self.map.manual = False
         self.selected = None
         self.refresh()
         self._fit_map()
@@ -436,6 +448,11 @@ class App(tk.Tk):
 
         strip = tk.Frame(stage, bg=UI_PANEL)
         strip.pack(side="bottom", fill="x")
+        self.btn_city = self._zoom_btn(strip, "城市总览", self.show_city_overview)
+        self.btn_city.pack(side="left", padx=(P(8), P(2)), pady=P(3))
+        self.lbl_city = tk.Label(strip, text="", bg=UI_PANEL, fg=UI_ACCENT,
+                                 font=(FONT, 8, "bold"), anchor="w")
+        self.lbl_city.pack(side="left", padx=P(6))
         self.legend_row = tk.Frame(strip, bg=UI_PANEL)
         self.legend_row.pack(side="left", padx=P(8), pady=P(3))
 
@@ -694,8 +711,10 @@ class App(tk.Tk):
         """开局镜头落点：玩家自己的第一座电厂 → 自己的变电站 → 第一座城。"""
         try:
             me = self.game.player
+            g = self.game
             for p in me.plants:
-                return (p.x, p.y)
+                if p.city == g.current_city and p.x >= 0 and p.y >= 0:
+                    return (p.x, p.y)
             for t in self.game.world.owned_tiles(me.idx):
                 if t.kind in ("substation", "line"):
                     return (t.x, t.y)
@@ -718,9 +737,187 @@ class App(tk.Tk):
         # 960×960 全图缩到 2% 什么都看不见，开局直接看玩家自己的电厂
         spot = self._map_focus_spot()
         if spot is not None:
-            self.map.focus_on(spot[0], spot[1], 0.5)
+            self.map.focus_on(spot[0], spot[1], 0.8)
             return
         self.map.fit()
+
+
+    # ------------------------------------------------------------ 城市总览
+    def _owner_name(self, owner: int) -> str:
+        g = self.game
+        if owner < 0:
+            return "待售"
+        if owner == g.player_idx:
+            return "你"
+        if 0 <= owner < len(g.companies):
+            return g.companies[owner].name
+        return "其他公司"
+
+    def show_city_overview(self) -> None:
+        win = getattr(self, "_city_win", None)
+        if win is not None and win.winfo_exists():
+            win.lift()
+            self._fill_city_overview()
+            return
+        P = scale.px
+        win = tk.Toplevel(self)
+        self._city_win = win
+        win.title("城市总览 · City Overview")
+        win.configure(bg=UI_BG)
+        win.geometry(f"{P(900)}x{P(640)}")
+        win.transient(self)
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        win.protocol("WM_DELETE_WINDOW", self._close_city_overview)
+        head = tk.Frame(win, bg=UI_BG)
+        head.pack(fill="x", padx=P(18), pady=(P(14), P(4)))
+        tk.Label(head, text="城市总览", bg=UI_BG, fg=UI_TEXT,
+                 font=(FONT, 18, "bold"), anchor="w").pack(side="left")
+        tk.Label(head, text="CITY OVERVIEW", bg=UI_BG, fg=UI_ACCENT,
+                 font=(FONT, 8), anchor="w").pack(side="left", padx=P(12), pady=(P(7), 0))
+        tk.Button(head, text="✕", command=self._close_city_overview, bg=UI_BG,
+                  fg=UI_DIM, activebackground=UI_HOVER, bd=0, relief="flat",
+                  font=(FONT, 11), cursor="hand2").pack(side="right")
+        tk.Frame(win, bg=UI_RULE, height=1).pack(fill="x", padx=P(18))
+        self._city_body = tk.Frame(win, bg=UI_BG)
+        self._city_body.pack(fill="both", expand=True, padx=P(18), pady=P(12))
+        self._fill_city_overview()
+
+    def _close_city_overview(self) -> None:
+        win = getattr(self, "_city_win", None)
+        if win is not None:
+            try:
+                win.grab_release()
+                win.destroy()
+            except tk.TclError:
+                pass
+        self._city_win = None
+
+    def _fill_city_overview(self) -> None:
+        g = self.game
+        P = scale.px
+        body = self._city_body
+        for w in body.winfo_children():
+            w.destroy()
+
+        cards = tk.Frame(body, bg=UI_BG)
+        cards.pack(fill="x")
+        cards.grid_columnconfigure(0, weight=1)
+        cards.grid_columnconfigure(1, weight=1)
+        for i, c in enumerate(g.cities):
+            card = tk.Frame(cards, bg=UI_PANEL2, highlightthickness=1,
+                            highlightbackground=UI_RULE, width=P(400), height=P(200))
+            card.grid(row=i // 2, column=i % 2, sticky="nsew",
+                      padx=(0 if i % 2 == 0 else P(10), P(10) if i % 2 == 0 else 0),
+                      pady=(0, P(10)))
+            card.grid_propagate(False)
+            owned = (c.owner == g.player_idx)
+            if c.ai:
+                tag = "已并入" if owned else "AI 城市"
+            else:
+                tag = "你拥有" if owned else "可购买"
+            tk.Label(card, text=c.name, bg=UI_PANEL2, fg=UI_TEXT,
+                     font=(FONT, 15, "bold"), anchor="w").pack(fill="x", padx=P(14), pady=(P(12), 0))
+            tk.Label(card, text=tag.upper(), bg=UI_PANEL2, fg=UI_ACCENT if owned else UI_DIM,
+                     font=(FONT, 7), anchor="w").pack(fill="x", padx=P(14))
+            tk.Label(card,
+                     text=f"需求 {c.demand_mw:,.0f} MW\n"
+                          f"你的份额 {c.share.get(g.player_idx, 0.0):.1%}\n"
+                          f"归属 {self._owner_name(c.owner)}",
+                     bg=UI_PANEL2, fg=UI_DIM, font=(FONT, 9), justify="left",
+                     anchor="w").pack(fill="x", padx=P(14), pady=(P(8), P(4)))
+            if c.ai:
+                hint = ("离屏城市 · 容量已并入你的全市场供电" if owned
+                        else "离屏城市 · 只参与全市场结算")
+                tk.Label(card, text=hint, bg=UI_PANEL2,
+                         fg=UI_DIM2, font=(FONT, 8), anchor="w").pack(
+                    fill="x", padx=P(14), pady=(P(4), P(8)))
+                continue
+            if owned:
+                if g.current_city == c.idx:
+                    btn = tk.Button(card, text="当前城市", state="disabled",
+                                    bg=UI_BLUE, fg=UI_TEXT, bd=0, relief="flat",
+                                    font=(FONT, 9, "bold"), pady=P(5))
+                else:
+                    btn = tk.Button(card, text="进入这座城市",
+                                    command=lambda i=c.idx: self._enter_city(i),
+                                    bg=UI_BLUE, fg=UI_TEXT, activebackground=UI_BLUE_HI,
+                                    bd=0, relief="flat", font=(FONT, 9, "bold"),
+                                    pady=P(5), cursor="hand2")
+                btn.pack(side="bottom", fill="x", padx=P(14), pady=P(12))
+            else:
+                can = (c.owner in (-1,) and g.player.reputation >= CITY_LICENSE_REP
+                       and g.player.cash >= CITY_LICENSE_COST)
+                btn = tk.Button(card, text=f"购买经营权 · {money(CITY_LICENSE_COST)}",
+                                command=lambda i=c.idx: self._buy_city(i),
+                                bg=UI_BLUE if can else UI_PANEL,
+                                fg=UI_TEXT if can else UI_DIM2,
+                                activebackground=UI_BLUE_HI, bd=0, relief="flat",
+                                font=(FONT, 8, "bold"), pady=P(5),
+                                state="normal" if can else "disabled",
+                                cursor="hand2" if can else "arrow")
+                tk.Label(card, text=f"需要声望 {CITY_LICENSE_REP:.0f} · 现金 {money(CITY_LICENSE_COST)}",
+                         bg=UI_PANEL2, fg=UI_DIM2, font=(FONT, 7)).pack(
+                    side="bottom", fill="x", padx=P(14), pady=(0, P(8)))
+                btn.pack(side="bottom", fill="x", padx=P(14), pady=(P(4), 0))
+
+        tk.Frame(body, bg=UI_RULE, height=1).pack(fill="x", pady=P(14))
+        tk.Label(body, text="跨城高压线", bg=UI_BG, fg=UI_TEXT,
+                 font=(FONT, 12, "bold"), anchor="w").pack(fill="x")
+        link = next((ln for ln in g.links if {ln.a, ln.b} == {0, 1}), None)
+        if link is not None:
+            tk.Label(body, text=f"已建成 · {link.capacity:.0f}MW · 线损 {link.loss:.0%}",
+                     bg=UI_BG, fg=UI_GOOD, font=(FONT, 9), anchor="w").pack(
+                fill="x", pady=(P(4), 0))
+        else:
+            can_link = (g.city_state(0).owner == g.player_idx
+                        and g.city_state(1).owner == g.player_idx
+                        and g.has_substation(0, g.player_idx)
+                        and g.has_substation(1, g.player_idx)
+                        and g.player.cash >= INTERCITY_LINK_COST)
+            tk.Label(body, text="两座城市都拥有、且各有变电站后才能架线。",
+                     bg=UI_BG, fg=UI_DIM, font=(FONT, 8), anchor="w").pack(
+                fill="x", pady=(P(2), P(4)))
+            btn = tk.Button(body, text=f"建跨城线 · {money(INTERCITY_LINK_COST)} / "
+                                       f"{INTERCITY_LINK_CAP:.0f}MW / 线损 {INTERCITY_LINK_LOSS:.0%}",
+                            command=self._build_city_link, bg=UI_BLUE if can_link else UI_PANEL,
+                            fg=UI_TEXT if can_link else UI_DIM2,
+                            activebackground=UI_BLUE_HI, bd=0, relief="flat",
+                            font=(FONT, 9, "bold"), pady=P(6),
+                            state="normal" if can_link else "disabled",
+                            cursor="hand2" if can_link else "arrow")
+            btn.pack(anchor="w", pady=P(4))
+
+    def _buy_city(self, idx: int) -> None:
+        ok, why = self.game.buy_city(idx)
+        self.toast(("已买下城市经营权" if ok else why), bad=not ok)
+        self.refresh()
+        if getattr(self, "_city_win", None) is not None:
+            self._fill_city_overview()
+
+    def _enter_city(self, idx: int) -> None:
+        ok, why = self.game.switch_city(idx)
+        if not ok:
+            self.toast(why, bad=True)
+            return
+        self._close_city_overview()
+        self.build_mode = None
+        self.map.build_mode = None
+        self.map.valid_tiles = set()
+        self.map.manual = False
+        self.selected = None
+        self.refresh()
+        self._fit_map()
+        self.toast(f"进入 {self.game.city_state(idx).name}")
+
+    def _build_city_link(self) -> None:
+        ok, why = self.game.build_intercity_link(0, 1)
+        self.toast(("跨城线已建成" if ok else why), bad=not ok)
+        self.refresh()
+        if getattr(self, "_city_win", None) is not None:
+            self._fill_city_overview()
 
     # -- 地图缩放控件
     def _zoom_btn(self, parent, text: str, command):
@@ -1404,8 +1601,10 @@ class App(tk.Tk):
         self.build_mode = None
         self.map.build_mode = None
         self.map.valid_tiles = set()
+        self.map.manual = False
         self.selected = None
         self.refresh()
+        self._fit_map()
 
 
     def save_game(self, silent: bool = False) -> None:
@@ -1431,12 +1630,18 @@ class App(tk.Tk):
             return
         try:
             with open(path, "rb") as f:
-                self.game = pickle.load(f)
+                game = pickle.load(f)
+            if getattr(game, "version", 0) < SAVE_VERSION or not getattr(game, "cities", None):
+                self.toast("存档版本过旧，无法读取", bad=True)
+                return
+            self.game = game
             self.build_mode = None
             self.map.build_mode = None
             self.map.valid_tiles = set()
+            self.map.manual = False
             self.selected = None
             self.refresh()
+            self._fit_map()
             self.toast(f"读取成功：{path}")
         except Exception as e:  # noqa: BLE001
             self.toast(f"读取失败：{e}", bad=True)
@@ -1472,6 +1677,10 @@ class App(tk.Tk):
         self.top_stats["cap"].config(text=money(me.market_cap()))
         self.top_stats["share"].config(text=f"{g.player_share():.1%}")
         self.top_stats["policy"].config(text=g.policy.stage())
+        city = g.city_state(g.current_city)
+        if city is not None:
+            self.lbl_city.config(
+                text=f"当前城市 {city.name} · 需求 {city.demand_mw:,.0f}MW")
 
         self.var_res.set(round(me.res_price))
         self.var_ind.set(round(me.ind_price))
@@ -1562,6 +1771,12 @@ class App(tk.Tk):
     def _sync_build_buttons(self) -> None:
         """内联校验：不可行的建造类型直接置灰，并在下方说明原因。"""
         me = self.game.player
+        city = self.game.city_state(self.game.current_city)
+        if city is None or city.owner != me.idx:
+            for btn in self.build_buttons.values():
+                btn.state(["disabled"])
+            self.lbl_build_info.config(text="尚未取得该城市经营权，无法建造", fg=UI_WARN)
+            return
         ready = 0
         missing: dict[str, list[str]] = {}
         for kind, btn in self.build_buttons.items():
@@ -1756,15 +1971,22 @@ RULES = """《电力公司》玩法与规则
      电厂必须和【城市半径 2 格内的变电站】通过【相邻的线路/电厂】连成一片，
      城市接口容量 = 半径内变电站(180MW) + 线路(120MW) 之和，线损随距离上升。
      送不出去的电 = 没有收入，但你依然付燃料和固定成本。
-  3. 客户看两件事：电价 + 可靠性
+  3. 城市与跨城线
+     一张地图就是一座城市。点地图下方【城市总览】切城：第一座城开局归你，
+     第二座城需花 1.2 亿并达到声望 55 才能买断经营权。
+     两座城都拥有、且各有变电站后，可在总览里花 6000 万架一条 300MW 跨城线，
+     线损 5%；盈余城市的电会自动送往缺口城市。
+     对手 AI 只在离屏城市（钢城/滨海）发电，不会在你的地图上占地建厂；
+     合并对手后，它的容量与客户留在原城市，并计入你的全市场供电。
+  4. 客户看两件事：电价 + 可靠性
      份额按「(市场均价/你的价)^弹性 × 口碑」分配，但每家拿到的份额不超过它的可交付容量。
      想抢份额，必须先建产能；只降价不建厂没有意义。
-  4. 掠夺定价与反垄断
+  5. 掠夺定价与反垄断
      把价格压到单位成本以下、同时份额超过 55%，连续 3 个回合会被罚 6000 万并禁止收购 2 回合。
-  5. 财报 → 股价
+  6. 财报 → 股价
      股价 = 滚动四季度 EPS × PE + 净资产锚定。市占率、负债率、口碑、事故会调整 PE。
      亏损会把股价打到净资产以下——那正是你被收购的窗口。
-  6. 股权阶梯
+  7. 股权阶梯
      5% 举牌（对手警觉） / 20% 董事席位 / 51% 控股（强制分红抽血、淘汰其机组）
      / 75% 吸收合并（资产、债务、矿权、人力全部并入，对方退市）。
      对手 AI 也会用同样手段对付你，负债过高、连续亏损时最危险。
@@ -1776,7 +1998,7 @@ RULES = """《电力公司》玩法与规则
   失败：资不抵债破产 / 被 AI 持股超过 51%。
 
 五、上手建议
-  1. 先抢钢城：560MW 完全没人供电，建变电站 + 一座电厂就能吃下。
+  1. 先在临江站稳：建变电站 + 一座电厂就能吃下本地需求，再考虑买北岭。
   2. 头 4 个季度没有碳税，抓紧用火电攒现金流，但别把装机堆到需求的 1.5 倍以上。
   3. 第 5 回合开始有碳税与新能源配额，提前铺光伏（荒漠/平原）。
   4. 看到对手股价跌到净资产 60% 以下就买；先到 51% 抽血，再到 75% 合并。

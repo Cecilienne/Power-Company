@@ -41,12 +41,13 @@ def plant_cf(game, co: Company, plant) -> float:
     """本季度该机组的容量因子（已含季节、资源、缺人惩罚）。"""
     spec = plant.spec
     season = season_index(game.turn)
-    tile = game.world.tile(plant.x, plant.y)
+    w = game.world_for_city(plant.city) if plant.city is not None else game.world
+    tile = w.tile(plant.x, plant.y) if (tile_ok := (w is not None and plant.x >= 0 and plant.y >= 0)) else None
     f = spec.base_cf
     if plant.kind == "wind":
-        f *= tile.wind * SEASON_WIND[season] * game.weather.get("wind", 1.0)
+        f *= (tile.wind if tile is not None else 1.0) * SEASON_WIND[season] * game.weather.get("wind", 1.0)
     elif plant.kind == "solar":
-        f *= tile.solar * SEASON_SOLAR[season] * game.weather.get("solar", 1.0)
+        f *= (tile.solar if tile is not None else 1.0) * SEASON_SOLAR[season] * game.weather.get("solar", 1.0)
     elif plant.kind == "hydro":
         f *= SEASON_RAIN[season] * game.weather.get("rain", 1.0)
     elif plant.kind in ("coal", "gas", "nuclear"):
@@ -96,20 +97,49 @@ def _clamped_split(active: list[Company], weights: dict[int, tuple[float, float]
 
 
 def settle_production(game) -> None:
-    world = game.world
     season = season_index(game.turn)
     dmul = SEASON_DEMAND[season]
     cos = [c for c in game.companies if c.alive and not c.delisted]
 
-    # 0. 需求随季节与增长波动
-    for city in world.cities:
+    # 0. 需求随季节与增长波动（含 AI 离屏城市）
+    for city in game.cities:
         city.demand_mw = city.base_mw * dmul * game.demand_shock
         city.refresh_split(RES_RATIO)
 
-    # 1. 各自的电网可交付容量
-    caps: dict[int, dict[int, float]] = {}
+    # 1. 各自的电网可交付容量：真实地图 + 离屏机组
+    caps: dict[int, dict[int, float]] = {
+        co.idx: {city.idx: 0.0 for city in game.cities} for co in cos
+    }
     for co in cos:
-        caps[co.idx] = {cid: v[0] for cid, v in all_city_supply(world, co.idx).items()}
+        for cid in (0, 1):
+            w = game.world_for_city(cid)
+            if w is None:
+                continue
+            supply = all_city_supply(w, co.idx)
+            caps[co.idx][cid] = supply.get(cid, (0.0, 0.0))[0]
+        for p in co.plants:
+            if p.online and p.x < 0 and p.y < 0:
+                caps[co.idx][p.city] = (caps[co.idx].get(p.city, 0.0)
+                                        + p.cap * plant_cf(game, co, p))
+
+    # 跨城线：只替玩家做自动潮流，盈余城送往缺口城
+    player = game.player
+    pcaps = caps.get(player.idx, {})
+    for ln in game.links:
+        ca, cb = pcaps.get(ln.a, 0.0), pcaps.get(ln.b, 0.0)
+        da = game.city_state(ln.a).demand_mw if game.city_state(ln.a) else 0.0
+        db = game.city_state(ln.b).demand_mw if game.city_state(ln.b) else 0.0
+        sa, sb = ca - da, cb - db
+        if sa > 0 and sb < 0:
+            flow = min(ln.capacity, sa, -sb / max(1e-6, 1.0 - ln.loss))
+            pcaps[ln.a] = ca - flow
+            pcaps[ln.b] = cb + flow * (1.0 - ln.loss)
+        elif sb > 0 and sa < 0:
+            flow = min(ln.capacity, sb, -sa / max(1e-6, 1.0 - ln.loss))
+            pcaps[ln.b] = cb - flow
+            pcaps[ln.a] = ca + flow * (1.0 - ln.loss)
+
+    for co in cos:
         co.grid_capacity = sum(caps[co.idx].values())
     game.city_cap = caps
 
@@ -119,7 +149,7 @@ def settle_production(game) -> None:
         co.last_income = IncomeStatement()
 
     # 2. 客户分流
-    for city in world.cities:
+    for city in game.cities:
         active = [c for c in cos if caps[c.idx].get(city.idx, 0.0) > 1.0]
         if not active:
             city.served = {}

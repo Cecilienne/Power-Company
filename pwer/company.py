@@ -31,6 +31,7 @@ class Plant:
     owner: int
     cap: float
     capex: float
+    city: int = 0
     build_turn: int = 0
     book_value: float = 0.0
     life_q: float = 60.0
@@ -74,6 +75,7 @@ class Mine:
     reserve: float
     output: float
     cost_per_t: float
+    city: int = 0
     build_turn: int = 0
     life_q: float = 80.0
     produced_last: float = 0.0
@@ -111,6 +113,7 @@ class Project:
     teams: int = 1
     progress: float = 0.0
     stalled_turns: int = 0
+    city: int = 0
 
     @property
     def name(self) -> str:
@@ -231,6 +234,7 @@ class Company:
     ai_alerted: bool = False
     banned_acq_turns: int = 0
     city_served: dict[int, tuple[float, float, float]] = field(default_factory=dict)
+    home_city: int = -1           # AI 公司的离屏城市；玩家为 -1
 
     # ------------------------------------------------------------ 行情（K 线）
     def note_price(self, p: float | None = None) -> None:
@@ -274,6 +278,7 @@ class Company:
         self.__dict__.update(state)
         self.__dict__.setdefault("candles", [])
         self.__dict__.setdefault("account_name", "")
+        self.__dict__.setdefault("home_city", -1)
         if getattr(self, "turn_open", 0.0) <= 0:
             self.turn_open = self.price
         if getattr(self, "turn_high", 0.0) <= 0:

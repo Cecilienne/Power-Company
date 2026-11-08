@@ -24,6 +24,7 @@ from ..constants import (
     BUILD,
     MAX_TURNS,
     MULTIPLAYER_READY,
+    SAVE_VERSION,
     UI_START_ACCENT,
     UI_START_BG,
     UI_START_BLUE,
@@ -203,6 +204,9 @@ class StartScreen(tk.Frame):
             try:
                 with open(p, "rb") as f:
                     game = pickle.load(f)
+                if (getattr(game, "version", 0) < SAVE_VERSION
+                        or not getattr(game, "cities", None)):
+                    continue
                 mtime = p.stat().st_mtime
             except Exception:  # noqa: BLE001
                 continue
